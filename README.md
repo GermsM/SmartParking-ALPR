@@ -251,10 +251,7 @@ source venv/bin/activate
 # 4. Installer les dépendances
 pip install -r requirements.txt
 
-# 5. Initialiser la base de données
-python db_init.py
-
-# 6. Lancer l'application
+# 5. Lancer l'application (la base de données est initialisée automatiquement)
 python app.py
 ```
 
