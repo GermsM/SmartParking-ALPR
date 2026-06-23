@@ -145,7 +145,7 @@
             }).then(function (r) {
                 if (!r.ok) throw new Error('read');
                 return r.json();
-            }).then(function () {
+            }).then(function (data) {
                 if (row) {
                     row.classList.remove('is-unread');
                     row.classList.add('is-read');
@@ -153,6 +153,7 @@
                     if (badge) badge.classList.remove('d-none');
                     btn.classList.add('d-none');
                 }
+                if (data && typeof data.unread_count !== 'undefined') updateNotifBadge(data.unread_count);
             }).catch(function () {
                 showError('Impossible de marquer comme lu.');
             });
@@ -179,13 +180,14 @@
             }).then(function (r) {
                 if (!r.ok) throw new Error('delete');
                 return r.json();
-            }).then(function () {
+            }).then(function (data) {
                 if (rowId) {
                     var row = document.getElementById('notif-row-' + rowId);
                     if (row) row.remove();
                 }
                 if (deleteModal) deleteModal.hide();
                 pendingDeleteUrl = null;
+                if (data && typeof data.unread_count !== 'undefined') updateNotifBadge(data.unread_count);
                 if (!document.querySelector('.notif-item')) {
                     var list = document.getElementById('notif-list');
                     if (list) list.innerHTML = '<div class="text-center text-secondary py-5">Aucune notification pour le moment.</div>';

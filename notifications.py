@@ -15,7 +15,7 @@ notifications_bp = Blueprint("notifications", __name__)
 def _notifications_query(role: str | None, site: str | None):
     q = Notification.query
     if role == "admin":
-        q = q.filter(Notification.category != "export_reminder")
+        q = q.filter(Notification.category.notin_(["export_reminder", "approve", "ban", "reactivate", "delete"]))
     else:
         user_id = session.get("user_id")
         filters = []
@@ -160,7 +160,8 @@ def mark_read(nid):
         or "application/json" in (request.headers.get("Accept") or "")
     )
     if wants_json:
-        return jsonify(ok=True)
+        unread = count_unread(session.get("role"), session.get("site"), session.get("user_id"))
+        return jsonify(ok=True, unread_count=unread)
     flash("Notification marquée comme lue.", "success")
     return redirect(url_for("notifications.list_notifications"))
 
@@ -191,7 +192,8 @@ def delete_notification(nid):
         or "application/json" in (request.headers.get("Accept") or "")
     )
     if wants_json:
-        return jsonify(ok=True)
+        unread = count_unread(session.get("role"), session.get("site"), session.get("user_id"))
+        return jsonify(ok=True, unread_count=unread)
     flash("Notification supprimée.", "success")
     return redirect(url_for("notifications.list_notifications"))
 
