@@ -1,0 +1,120 @@
+{% extends 'base.html' %}
+{% block title %}Ajouter un véhicule — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+    <h1 class="h3 mb-1">Nouveau véhicule</h1>
+    <p class="text-secondary mb-0">{% if session.role == 'gardien' %}Demande en attente de validation par l'administrateur{% else %}Enregistrement direct (actif){% endif %}</p>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-xl-9">
+        <div class="card card-ps">
+            <div class="card-body p-4">
+                <form method="post">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label" for="vehicle_type">Type de véhicule</label>
+                            <select class="form-select" id="vehicle_type" name="vehicle_type">
+                                <option value="auto">Automobile</option>
+                                <option value="moto">Moto / scooter</option>
+                                <option value="sans_plaque">Sans plaque (identifiant UCB)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4" id="plate-field">
+                            <label class="form-label" for="plate_number">Plaque</label>
+                            <input type="text" class="form-control text-uppercase" id="plate_number" name="plate_number">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="vehicle_model">Marque / modèle</label>
+                            <input type="text" class="form-control" id="vehicle_model" name="vehicle_model" placeholder="ex. Toyota RAV4">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_name">Nom du propriétaire</label>
+                            <input type="text" class="form-control" id="owner_name" name="owner_name" required>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="no_plate" name="no_plate">
+                                <label class="form-check-label" for="no_plate">
+                                    Véhicule sans plaque d'immatriculation — un code <strong>UCB-SITE-XXXX</strong> sera généré (motos, certains modèles)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_phone">Téléphone</label>
+                            <input type="tel" class="form-control" id="owner_phone" name="owner_phone" placeholder="+243…">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_email">E-mail <span class="text-warning">*</span></label>
+                            <input type="email" class="form-control" id="owner_email" name="owner_email" placeholder="nom@exemple.cd" required>
+                            <div class="form-text">Confirmation d'enregistrement envoyée à cette adresse.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="function">Fonction / statut</label>
+                            {% if session.role == 'gardien' %}
+                            <select class="form-select" id="function" name="function" required>
+                                <option value="" selected>— Choisir —</option>
+                                <option value="Fonctionnaire">Fonctionnaire</option>
+                                <option value="Étudiant">Étudiant</option>
+                                <option value="Visiteur">Visiteur</option>
+                            </select>
+                            {% else %}
+                            <input type="text" class="form-control" id="function" name="function" placeholder="Personnel, enseignant…">
+                            {% endif %}
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="owner_address">Adresse</label>
+                            <input type="text" class="form-control" id="owner_address" name="owner_address" placeholder="Quartier, avenue, ville…">
+                        </div>
+                        <div class="col-12">
+                            {% if session.role == 'gardien' %}
+                            <label class="form-label">Site UCB</label>
+                            <div class="alert alert-info py-2 mb-0">
+                                Demande pour <strong>{{ session.site or '—' }}</strong> — l'administrateur validera.
+                            </div>
+                            {% else %}
+                            <label class="form-label" for="site_authorized">Site autorisé</label>
+                            <select class="form-select" id="site_authorized" name="site_authorized">
+                                <option value="">Tous les sites</option>
+                                {% for s in ucb_sites %}
+                                <option value="{{ s }}">{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-4">
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                        <a href="{{ url_for('vehicles.list_vehicles') }}" class="btn btn-outline-secondary">Annuler</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    var noPlate = document.getElementById('no_plate');
+    var plateField = document.getElementById('plate-field');
+    var plateInput = document.getElementById('plate_number');
+    var vtype = document.getElementById('vehicle_type');
+    function sync() {
+        var hide = noPlate.checked || vtype.value === 'sans_plaque';
+        plateField.style.display = hide ? 'none' : '';
+        plateInput.required = !hide;
+        if (hide) plateInput.value = '';
+    }
+    noPlate.addEventListener('change', sync);
+    vtype.addEventListener('change', function () {
+        if (vtype.value === 'sans_plaque') noPlate.checked = true;
+        sync();
+    });
+    sync();
+})();
+</script>
+{% endblock %}

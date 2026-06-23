@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Parking UCB{% endblock %}</title>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('ucb_theme');
+                if (t === 'light' || t === 'dark') {
+                    document.documentElement.setAttribute('data-theme', t);
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        :root, [data-theme="dark"] {
+            --ps-bg: #0f1419;
+            --ps-surface: #1a2332;
+            --ps-card: #222d3d;
+            --ps-border: rgba(255,255,255,.08);
+            --ps-accent: #3d8bfd;
+            --ps-accent-soft: rgba(61, 139, 253, .15);
+            --ps-text: #e8edf4;
+            --ps-muted: #8b9cb3;
+            --ps-success: #2fb27a;
+            --ps-warning: #f0b429;
+            --ps-danger: #e85d6a;
+            --ps-navbar-bg: rgba(15, 20, 25, .92);
+            --ps-body-grad1: #0b0f14;
+            --ps-body-grad2: #121a24;
+            --ps-body-grad3: #0f1419;
+            --ps-nav-hover: rgba(255,255,255,.05);
+            --ps-shadow: rgba(0,0,0,.25);
+        }
+        [data-theme="light"] {
+            --ps-bg: #f4f6fa;
+            --ps-surface: #ffffff;
+            --ps-card: #ffffff;
+            --ps-border: rgba(0,0,0,.1);
+            --ps-accent: #0d6efd;
+            --ps-accent-soft: rgba(13, 110, 253, .12);
+            --ps-text: #1a2332;
+            --ps-muted: #5c6b80;
+            --ps-success: #198754;
+            --ps-warning: #cc9a06;
+            --ps-danger: #dc3545;
+            --ps-navbar-bg: rgba(255, 255, 255, .96);
+            --ps-body-grad1: #eef2f7;
+            --ps-body-grad2: #f8fafc;
+            --ps-body-grad3: #f0f4f8;
+            --ps-nav-hover: rgba(0,0,0,.05);
+            --ps-shadow: rgba(0,0,0,.08);
+        }
+        body {
+            font-family: "DM Sans", system-ui, sans-serif;
+            background: linear-gradient(165deg, var(--ps-body-grad1) 0%, var(--ps-body-grad2) 40%, var(--ps-body-grad3) 100%);
+            color: var(--ps-text);
+            min-height: 100vh;
+        }
+        .navbar-app {
+            background: var(--ps-navbar-bg) !important;
+            border-bottom: 1px solid var(--ps-border);
+            backdrop-filter: blur(10px);
+        }
+        .navbar-app .navbar-brand {
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: var(--ps-text) !important;
+        }
+        .navbar-app .nav-link {
+            color: var(--ps-muted) !important;
+            border-radius: .5rem;
+            padding: .45rem .85rem !important;
+            margin: 0 .1rem;
+            font-weight: 500;
+            transition: color .15s, background .15s;
+        }
+        .navbar-app .nav-link:hover {
+            color: var(--ps-text) !important;
+            background: var(--ps-nav-hover);
+        }
+        .navbar-app .nav-link.active {
+            color: var(--ps-text) !important;
+            background: var(--ps-accent-soft);
+        }
+        .navbar-app .nav-link i {
+            margin-right: .35rem;
+            opacity: .9;
+        }
+        [data-theme="light"] .navbar-app .navbar-toggler {
+            border-color: var(--ps-border);
+        }
+        [data-theme="light"] .navbar-app .navbar-toggler-icon {
+            filter: invert(0.75);
+        }
+        .page-wrap { padding-bottom: 3rem; }
+        .page-header h1 { font-weight: 700; letter-spacing: -0.03em; }
+        .page-header .lead { color: var(--ps-muted); }
+        .card-ps {
+            background: var(--ps-card);
+            border: 1px solid var(--ps-border);
+            border-radius: 1rem;
+            color: var(--ps-text);
+            box-shadow: 0 8px 32px var(--ps-shadow);
+        }
+        .card-ps .card-label {
+            color: var(--ps-muted);
+            font-size: .8rem;
+            text-transform: uppercase;
+            letter-spacing: .06em;
+            font-weight: 600;
+        }
+        .card-ps .metric {
+            font-size: 2.25rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            line-height: 1.1;
+        }
+        .card-ps.border-accent-primary { border-top: 3px solid var(--ps-accent); }
+        .card-ps.border-accent-success { border-top: 3px solid var(--ps-success); }
+        .card-ps.border-accent-warning { border-top: 3px solid var(--ps-warning); }
+        .card-ps.border-accent-danger { border-top: 3px solid var(--ps-danger); }
+        .card-ps.border-accent-muted { border-top: 3px solid #6c7d95; }
+        .table-darkish {
+            --bs-table-bg: var(--ps-surface);
+            --bs-table-striped-bg: rgba(128,128,128,.06);
+            --bs-table-hover-bg: rgba(61, 139, 253, .1);
+            color: var(--ps-text);
+            border-color: var(--ps-border);
+        }
+        .table-darkish thead th {
+            border-color: var(--ps-border);
+            color: var(--ps-muted);
+            font-size: .72rem;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+        .form-control, .form-select {
+            background: var(--ps-surface);
+            border-color: var(--ps-border);
+            color: var(--ps-text);
+        }
+        .form-control:focus, .form-select:focus {
+            background: var(--ps-surface);
+            border-color: var(--ps-accent);
+            color: var(--ps-text);
+            box-shadow: 0 0 0 .2rem rgba(61, 139, 253, .22);
+        }
+        .form-label { color: var(--ps-muted); }
+        .form-control::placeholder,
+        .form-select::placeholder,
+        textarea.form-control::placeholder {
+            color: var(--ps-muted);
+            opacity: 0.85;
+        }
+        .form-control::-webkit-input-placeholder,
+        .form-select::-webkit-input-placeholder {
+            color: var(--ps-muted);
+            opacity: 0.85;
+        }
+        .form-text { color: var(--ps-muted); }
+        .btn-primary {
+            --bs-btn-bg: var(--ps-accent);
+            --bs-btn-border-color: var(--ps-accent);
+        }
+        .alert { border-radius: .75rem; border: none; }
+        .login-card {
+            max-width: 420px;
+            margin: 4rem auto;
+            background: var(--ps-card);
+            border: 1px solid var(--ps-border);
+            border-radius: 1rem;
+            padding: 2rem;
+            box-shadow: 0 16px 48px var(--ps-shadow);
+        }
+        .badge-role { font-weight: 600; padding: .35em .65em; }
+        .text-secondary { color: var(--ps-muted) !important; }
+        [data-theme="light"] .btn-nav-logout {
+            color: var(--ps-text);
+            border-color: var(--ps-border);
+        }
+        [data-theme="light"] .btn-close { filter: none; opacity: .55; }
+        .btn-shortcut-outline {
+            color: var(--ps-text);
+            border: 1px solid var(--ps-border);
+            background: transparent;
+        }
+        .btn-shortcut-outline:hover {
+            color: var(--ps-text);
+            background: var(--ps-nav-hover);
+            border-color: var(--ps-muted);
+        }
+        .user-chip .name-line {
+            font-size: .85rem;
+            font-weight: 600;
+            color: var(--ps-text);
+            line-height: 1.2;
+        }
+        .admin-toolbar .btn-icon {
+            width: 2.25rem;
+            height: 2.25rem;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .video-wall .stream-box {
+            height: clamp(160px, 42vmin, 48vh);
+            min-height: 140px;
+            object-fit: cover;
+            background: #000;
+            width: 100%;
+        }
+        .video-wall.focus-mode .stream-box {
+            height: clamp(280px, 72vh, 900px);
+            min-height: 240px;
+        }
+        .video-tile { cursor: pointer; transition: transform .15s, box-shadow .15s; }
+        .video-tile:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--ps-shadow); }
+        .vehicle-actions-menu .dropdown-menu {
+            background: var(--ps-card);
+            border-color: var(--ps-border);
+        }
+        .vehicle-actions-menu .dropdown-item {
+            color: var(--ps-text);
+        }
+        .vehicle-actions-menu .dropdown-item:hover {
+            background: var(--ps-accent-soft);
+            color: var(--ps-text);
+        }
+        .notif-copy-box {
+            font-size: .8rem;
+            background: var(--ps-surface);
+            border: 1px solid var(--ps-border);
+            border-radius: .5rem;
+            padding: .5rem .75rem;
+            margin-top: .5rem;
+            white-space: pre-wrap;
+        }
+        /* Style des notifications Toast premium */
+        .ps-toast-container {
+            position: fixed;
+            top: 5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            pointer-events: none;
+            width: 90%;
+            max-width: 450px;
+        }
+        .ps-toast {
+            pointer-events: auto;
+            background: rgba(34, 45, 61, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 0.75rem;
+            padding: 0.85rem 1.25rem;
+            color: var(--ps-text);
+            box-shadow: 0 8px 32px var(--ps-shadow);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            opacity: 0;
+            transform: translateY(-20px) scale(0.95);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        [data-theme="light"] .ps-toast {
+            background: rgba(255, 255, 255, 0.85);
+            border: 1px solid rgba(0, 0, 0, 0.08);
+        }
+        .ps-toast.show {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        .ps-toast.hide {
+            opacity: 0;
+            transform: translateY(-20px) scale(0.9);
+            pointer-events: none;
+        }
+        .ps-toast-content {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.95rem;
+            font-weight: 500;
+        }
+        .ps-toast-icon {
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        .ps-toast-close {
+            background: none;
+            border: none;
+            color: var(--ps-muted);
+            font-size: 1.1rem;
+            cursor: pointer;
+            padding: 0;
+            line-height: 1;
+            transition: color 0.15s;
+        }
+        .ps-toast-close:hover {
+            color: var(--ps-text);
+        }
+        .ps-toast-success {
+            border-left: 4px solid var(--ps-success);
+        }
+        .ps-toast-success .ps-toast-icon {
+            color: var(--ps-success);
+        }
+        .ps-toast-danger {
+            border-left: 4px solid var(--ps-danger);
+        }
+        .ps-toast-danger .ps-toast-icon {
+            color: var(--ps-danger);
+        }
+        .ps-toast-warning {
+            border-left: 4px solid var(--ps-warning);
+        }
+        .ps-toast-warning .ps-toast-icon {
+            color: var(--ps-warning);
+        }
+        .ps-toast-info {
+            border-left: 4px solid var(--ps-accent);
+        }
+        .ps-toast-info .ps-toast-icon {
+            color: var(--ps-accent);
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <button type="button" class="btn btn-outline-secondary btn-sm position-fixed top-0 end-0 m-3" id="themeToggle" style="z-index:2000;" title="Mode clair ou sombre" aria-label="Changer le thème">
+        <i class="bi bi-sun-fill" id="themeIconSun"></i>
+        <i class="bi bi-moon-stars-fill d-none" id="themeIconMoon"></i>
+    </button>
+    {% if session.get('user_id') %}
+    <nav class="navbar navbar-expand-lg navbar-app">
+        <div class="container pe-5">
+            <a class="navbar-brand" href="{{ url_for('index') }}"><i class="bi bi-p-square-fill me-1 text-primary"></i> Parking UCB</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navMain" aria-controls="navMain" aria-expanded="false" aria-label="Menu">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navMain">
+                <ul class="navbar-nav me-auto mt-2 mt-lg-0">
+                    {% if session.role == 'gardien' %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'live' %}active{% endif %}" href="{{ url_for('live') }}">
+                            <i class="bi bi-camera-video"></i> Détection live
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'vehicles.list_vehicles' %}active{% endif %}" href="{{ url_for('vehicles.list_vehicles') }}">
+                            <i class="bi bi-truck-front"></i> Véhicules
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'logs.view_logs' %}active{% endif %}" href="{{ url_for('logs.view_logs') }}">
+                            <i class="bi bi-clock-history"></i> Historique
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'logs.export_frequency_page' %}active{% endif %}" href="{{ url_for('logs.export_frequency_page') }}">
+                            <i class="bi bi-file-earmark-spreadsheet"></i> Export CSV
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'notifications.list_notifications' %}active{% endif %}" href="{{ url_for('notifications.list_notifications') }}">
+                            <i class="bi bi-bell"></i> Notifications
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                            <i class="bi bi-grid-1x2"></i> Tableau de bord
+                        </a>
+                    </li>
+                    {% else %}
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                            <i class="bi bi-grid-1x2"></i> Tableau de bord
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'admin_videos' %}active{% endif %}" href="{{ url_for('admin_videos') }}">
+                            <i class="bi bi-camera-reels"></i> Surveillance
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link position-relative {% if request.endpoint == 'vehicles.list_vehicles' %}active{% endif %}" href="{{ url_for('vehicles.list_vehicles') }}">
+                            <i class="bi bi-truck-front"></i> Véhicules
+                            {% if pending_vehicle_count > 0 %}
+                            <span class="badge bg-danger rounded-pill ms-1 align-middle">{{ pending_vehicle_count }}</span>
+                            {% endif %}
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'logs.view_logs' %}active{% endif %}" href="{{ url_for('logs.view_logs') }}">
+                            <i class="bi bi-clock-history"></i> Historique
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'logs.export_frequency_page' %}active{% endif %}" href="{{ url_for('logs.export_frequency_page') }}">
+                            <i class="bi bi-file-earmark-spreadsheet"></i> Export CSV
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'site_policy.list_policies' %}active{% endif %}" href="{{ url_for('site_policy.list_policies') }}">
+                            <i class="bi bi-sliders"></i> Politiques
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {% if request.endpoint == 'admin_staff.list_gardiens' %}active{% endif %}" href="{{ url_for('admin_staff.list_gardiens') }}">
+                            <i class="bi bi-people"></i> Gardiens
+                        </a>
+                    </li>
+                    {% endif %}
+                </ul>
+                {% if session.role == 'admin' %}
+                <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end admin-toolbar">
+                    <div class="user-chip text-end d-none d-md-block me-1">
+                        <div class="name-line">{{ session.full_name or session.username }}</div>
+                        <span class="badge bg-primary badge-role">admin</span>
+                    </div>
+                    <a href="{{ url_for('notifications.list_notifications') }}" class="btn btn-outline-info btn-sm btn-icon position-relative" title="Notifications">
+                        <i class="bi bi-bell"></i>
+                        {% if unread_notifications > 0 %}
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="font-size:.65rem;">{{ unread_notifications }}</span>
+                        {% endif %}
+                    </a>
+                    <div class="dropdown">
+                        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                            Compte
+                        </button>
+                        <ul class="dropdown-menu dropdown-menu-end" style="background: var(--ps-card); border-color: var(--ps-border);">
+                            <li><a class="dropdown-item" style="color: var(--ps-text);" href="{{ url_for('auth.change_password') }}"><i class="bi bi-key me-2"></i>Mot de passe</a></li>
+                            <li><hr class="dropdown-divider" style="border-color: var(--ps-border);"></li>
+                            <li><a class="dropdown-item" style="color: var(--ps-danger);" href="{{ url_for('auth.logout') }}"><i class="bi bi-box-arrow-right me-2"></i>Déconnexion</a></li>
+                        </ul>
+                    </div>
+                </div>
+                {% else %}
+                <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+                    <span class="text-secondary small d-none d-md-inline">{{ session.full_name or session.username }}</span>
+                    <span class="badge rounded-pill bg-primary badge-role">{{ session.role }}</span>
+                    <a href="{{ url_for('auth.change_password') }}" class="btn btn-outline-secondary btn-sm" title="Changer mot de passe"><i class="bi bi-key"></i></a>
+                    <a href="{{ url_for('notifications.list_notifications') }}" class="btn btn-outline-info btn-sm position-relative" title="Notifications">
+                        <i class="bi bi-bell"></i>
+                        {% if unread_notifications > 0 %}
+                        <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ unread_notifications }}</span>
+                        {% endif %}
+                    </a>
+                    <a href="{{ url_for('auth.logout') }}" class="btn btn-outline-light btn-sm btn-nav-logout"><i class="bi bi-box-arrow-right"></i> Déconnexion</a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+    {% endif %}
+
+    <div class="container page-wrap mt-4">
+        <!-- Conteneur pour toasts -->
+        <div id="toast-container" class="ps-toast-container"></div>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+    // Système de Toast dynamique et personnalisé
+    function showToast(message, category = 'info', duration = 4000) {
+        var container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'ps-toast-container';
+            document.body.appendChild(container);
+        }
+        
+        var toast = document.createElement('div');
+        toast.className = 'ps-toast ps-toast-' + category;
+        
+        var icon = 'bi-info-circle-fill';
+        if (category === 'success') icon = 'bi-check-circle-fill';
+        else if (category === 'danger') icon = 'bi-exclamation-triangle-fill';
+        else if (category === 'warning') icon = 'bi-exclamation-circle-fill';
+        
+        toast.innerHTML = `
+            <div class="ps-toast-content">
+                <i class="bi ${icon} ps-toast-icon"></i>
+                <span>${message}</span>
+            </div>
+            <button class="ps-toast-close" aria-label="Fermer"><i class="bi bi-x"></i></button>
+        `;
+        
+        container.appendChild(toast);
+        
+        // Démarrage de l'animation d'apparition
+        setTimeout(function() {
+            toast.classList.add('show');
+        }, 10);
+        
+        var dismissTimeout = setTimeout(function() {
+            dismiss();
+        }, duration);
+        
+        function dismiss() {
+            toast.classList.remove('show');
+            toast.classList.add('hide');
+            toast.addEventListener('transitionend', function() {
+                toast.remove();
+            });
+        }
+        
+        toast.querySelector('.ps-toast-close').addEventListener('click', function() {
+            clearTimeout(dismissTimeout);
+            dismiss();
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    showToast({{ message|tojson }}, {{ category|tojson }});
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    });
+    </script>
+    <script>
+    (function () {
+        function syncThemeIcons() {
+            var theme = document.documentElement.getAttribute('data-theme') || 'dark';
+            var sun = document.getElementById('themeIconSun');
+            var moon = document.getElementById('themeIconMoon');
+            if (!sun || !moon) return;
+            if (theme === 'light') {
+                sun.classList.add('d-none');
+                moon.classList.remove('d-none');
+            } else {
+                moon.classList.add('d-none');
+                sun.classList.remove('d-none');
+            }
+        }
+        syncThemeIcons();
+        var btn = document.getElementById('themeToggle');
+        if (btn) {
+            btn.addEventListener('click', function () {
+                var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+                var next = cur === 'light' ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', next);
+                try { localStorage.setItem('ucb_theme', next); } catch (e) {}
+                syncThemeIcons();
+            });
+        }
+    })();
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

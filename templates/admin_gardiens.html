@@ -1,0 +1,147 @@
+{% extends 'base.html' %}
+{% block title %}Gardiens — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+    <h1 class="h3 mb-1">Comptes gardiens</h1>
+    <p class="text-secondary mb-0">Créez un identifiant par personne ou par poste ; désactivez un compte quand le quart est terminé.</p>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card card-ps">
+            <div class="card-body p-4">
+                <h2 class="h6 text-uppercase text-secondary mb-3">Nouveau gardien</h2>
+                <form method="post" action="{{ url_for('admin_staff.create_gardien') }}">
+                    <div class="mb-3">
+                        <label class="form-label" for="username">Nom d'utilisateur</label>
+                        <input type="text" class="form-control" id="username" name="username" required autocomplete="off" placeholder="ex. gardien_matin">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="password">Mot de passe initial</label>
+                        <input type="text" class="form-control" id="password" name="password" minlength="4" placeholder="Laisser vide = généré automatiquement">
+                        <div class="form-check mt-2">
+                            <input class="form-check-input" type="checkbox" id="auto_password" name="auto_password" checked>
+                            <label class="form-check-label small" for="auto_password">Générer un mot de passe aléatoire (le gardien le changera à la 1<sup>re</sup> connexion)</label>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="full_name">Nom affiché</label>
+                        <input type="text" class="form-control" id="full_name" name="full_name" placeholder="Prénom Nom">
+                    </div>
+                    <div class="mb-4">
+                            <label class="form-label" for="site">Site surveillé</label>
+                            <select class="form-select" id="site" name="site" required>
+                                <option value="">— Choisir —</option>
+                                {% for s in ucb_sites %}
+                                <option value="{{ s }}">{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Créer le compte</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card card-ps">
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover table-darkish mb-0">
+                        <thead>
+                            <tr>
+                                <th>Identifiant</th>
+                                <th>Nom</th>
+                                <th>Site</th>
+                                <th>État</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for g in gardiens %}
+                            <tr>
+                                <td><strong>{{ g.username }}</strong></td>
+                                <td>{{ g.full_name or '—' }}</td>
+                                <td>{{ g.site or '—' }}</td>
+                                <td>
+                                    {% if g.is_active %}
+                                    <span class="badge bg-success">Actif</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Désactivé</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <form method="post" action="{{ url_for('admin_staff.toggle_gardien_active', user_id=g.id) }}" class="d-inline">
+                                        <button type="submit" class="btn btn-sm btn-outline-warning">
+                                            {% if g.is_active %}Désactiver{% else %}Réactiver{% endif %}
+                                        </button>
+                                    </form>
+                                    <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#pwd-{{ g.id }}">Mot de passe</button>
+                                    <button type="button" class="btn btn-sm btn-outline-danger btn-delete-gardien" data-gardien-username="{{ g.username }}" data-delete-url="{{ url_for('admin_staff.delete_gardien', user_id=g.id) }}">
+                                        Supprimer
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr class="collapse table-darkish" id="pwd-{{ g.id }}">
+                                <td colspan="5" class="bg-dark border-secondary">
+                                    <form method="post" action="{{ url_for('admin_staff.reset_gardien_password', user_id=g.id) }}" class="row g-2 align-items-end p-3">
+                                        <div class="col-md-8">
+                                            <label class="form-label small mb-0">Nouveau mot de passe pour {{ g.username }}</label>
+                                            <input type="text" name="new_password" class="form-control form-control-sm" required minlength="4" placeholder="Nouveau mot de passe">
+                                        </div>
+                                        <div class="col-md-4">
+                                            <button type="submit" class="btn btn-sm btn-primary w-100">Enregistrer</button>
+                                        </div>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="5" class="text-center text-secondary py-4">Aucun gardien — créez un premier compte à gauche.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal confirmation suppression gardien -->
+<div class="modal fade" id="confirmDeleteGardienModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>Supprimer le compte gardien ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Cette action est <strong>irréversible</strong>.</p>
+                <p class="mb-0 mt-2">Compte : <strong id="confirmDeleteGardienName"></strong></p>
+                <p class="text-secondary small mt-2 mb-0"><i class="bi bi-info-circle"></i> Les logs et notifications liés à ce gardien seront conservés mais détachés.</p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmDeleteGardienForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-danger"><i class="bi bi-trash me-1"></i>Supprimer définitivement</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var modal = document.getElementById('confirmDeleteGardienModal');
+    if (!modal) return;
+    document.querySelectorAll('.btn-delete-gardien').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.getElementById('confirmDeleteGardienName').textContent = btn.getAttribute('data-gardien-username') || '';
+            document.getElementById('confirmDeleteGardienForm').setAttribute('action', btn.getAttribute('data-delete-url') || '#');
+            new bootstrap.Modal(modal).show();
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

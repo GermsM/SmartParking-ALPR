@@ -1,0 +1,184 @@
+{% extends 'base.html' %}
+{% block title %}Surveillance — Parking UCB{% endblock %}
+{% block extra_css %}
+<style>
+    .stream-container {
+        background: #000000;
+        border-radius: 0.5rem;
+        overflow: hidden;
+        border: 1px solid var(--ps-border);
+    }
+    .stream-img {
+        width: 100%;
+        height: auto;
+        display: block;
+        object-fit: cover;
+    }
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4 d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+        <h1 class="h3 mb-1">
+            {% if focus_site %}Surveillance — {{ focus_site }}{% else %}Mur de surveillance vidéo{% endif %}
+        </h1>
+        <p class="text-secondary mb-0 small">
+            {% if focus_site %}Affichage des flux d'entree et de sortie pour ce site.{% else %}Apercu en temps réel de tous les sites enregistres.{% endif %}
+        </p>
+    </div>
+    {% if focus_site %}
+    <a href="{{ url_for('admin_videos') }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-grid-fill"></i> Voir tous les sites
+    </a>
+    {% endif %}
+</div>
+
+{% if focus_site %}
+<!-- Mode focus sur un site : snapshots à rafraîchissement rapide (évite la lourdeur du double flux MJPEG+YOLO) -->
+<div class="card card-ps overflow-hidden">
+    <div class="card-header py-3 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+        <strong>{{ focus_site }}</strong>
+        <a href="{{ url_for('live') }}?site={{ focus_site|urlencode }}" class="btn btn-sm btn-success">
+            <i class="bi bi-camera-video"></i> Vue detailee
+        </a>
+    </div>
+    <div class="card-body p-3">
+        <div class="row g-3">
+            <div class="col-md-6 text-center">
+                <div class="stream-container">
+                    <div class="p-2 bg-dark text-secondary small text-start font-weight-bold">Flux d'Entree</div>
+                    <img src="{{ url_for('camera_snapshot') }}?site={{ focus_site|urlencode }}&camera_type=entry" alt="Entree {{ focus_site }}" class="stream-img snapshot-img focus-snapshot" data-site="{{ focus_site }}" data-camera="entry">
+                    <div class="p-1 bg-dark text-secondary small text-center">Rafraîchi en direct</div>
+                </div>
+            </div>
+            <div class="col-md-6 text-center">
+                <div class="stream-container">
+                    <div class="p-2 bg-dark text-secondary small text-start font-weight-bold">Flux de Sortie</div>
+                    <img src="{{ url_for('camera_snapshot') }}?site={{ focus_site|urlencode }}&camera_type=exit" alt="Sortie {{ focus_site }}" class="stream-img snapshot-img focus-snapshot" data-site="{{ focus_site }}" data-camera="exit">
+                    <div class="p-1 bg-dark text-secondary small text-center">Rafraîchi en direct</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<!-- Mode general : La grille s'adapte selon le nombre de sites -->
+<div class="row g-4">
+    {% if sites|length == 0 %}
+    <div class="col-12 text-center text-secondary py-5">
+        Aucun site n'est configure en base de donnees. Allez dans l'onglet <a href="{{ url_for('site_policy.list_policies') }}">Politiques</a> pour ajouter des sites.
+    </div>
+    {% elif sites|length == 1 %}
+    <!-- Si 1 seul site : Prend toute la largeur, divise en 2 colonnes (Entree / Sortie) -->
+    {% set s = sites[0] %}
+    <div class="col-12">
+        <div class="card card-ps overflow-hidden">
+            <div class="card-header py-3 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+                <strong>{{ s.name }} (Site unique)</strong>
+                <a href="{{ url_for('admin_videos') }}?site={{ s.name|urlencode }}" class="btn btn-sm btn-outline-light">
+                    <i class="bi bi-zoom-in"></i> Mode Focus
+                </a>
+            </div>
+            <div class="card-body p-3">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="stream-container">
+                            <div class="p-2 bg-dark text-secondary small font-weight-bold">ENTREE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=entry" alt="Entree {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="entry">
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="stream-container">
+                            <div class="p-2 bg-dark text-secondary small font-weight-bold">SORTIE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=exit" alt="Sortie {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="exit">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    {% elif sites|length == 2 %}
+    <!-- Si 2 sites : Divise en 2 colonnes proportionnelles sur l'ecran (col-md-6) -->
+    {% for s in sites %}
+    <div class="col-md-6">
+        <div class="card card-ps overflow-hidden h-100">
+            <div class="card-header py-3 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+                <strong>{{ s.name }}</strong>
+                <a href="{{ url_for('admin_videos') }}?site={{ s.name|urlencode }}" class="btn btn-sm btn-icon btn-outline-secondary" title="Agrandir">
+                    <i class="bi bi-zoom-in"></i>
+                </a>
+            </div>
+            <div class="card-body p-3">
+                <div class="row g-2">
+                    <div class="col-6">
+                        <div class="stream-container">
+                            <div class="p-1 bg-dark text-secondary font-weight-bold text-center" style="font-size: 0.7rem;">ENTREE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=entry" alt="Entree {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="entry" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="stream-container">
+                            <div class="p-1 bg-dark text-secondary font-weight-bold text-center" style="font-size: 0.7rem;">SORTIE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=exit" alt="Sortie {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="exit" loading="lazy">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% else %}
+    <!-- Si 3 sites ou plus : Grille de 3 colonnes sur grand ecran, 2 colonnes sur ecran moyen -->
+    {% for s in sites %}
+    <div class="col-md-6 col-xl-4">
+        <div class="card card-ps overflow-hidden h-100">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+                <strong class="small">{{ s.name }}</strong>
+                <a href="{{ url_for('admin_videos') }}?site={{ s.name|urlencode }}" class="btn btn-sm btn-icon btn-outline-secondary" title="Focus" style="padding: 0 0.35rem;">
+                    <i class="bi bi-zoom-in" style="font-size: 0.75rem;"></i>
+                </a>
+            </div>
+            <div class="card-body p-2">
+                <div class="row g-1">
+                    <div class="col-6">
+                        <div class="stream-container">
+                            <div class="p-1 bg-dark text-secondary text-center" style="font-size: 0.65rem;">ENTREE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=entry" alt="Entree {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="entry" loading="lazy">
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="stream-container">
+                            <div class="p-1 bg-dark text-secondary text-center" style="font-size: 0.65rem;">SORTIE</div>
+                            <img src="{{ url_for('camera_snapshot') }}?site={{ s.name|urlencode }}&camera_type=exit" alt="Sortie {{ s.name }}" class="stream-img snapshot-img" data-site="{{ s.name }}" data-camera="exit" loading="lazy">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    function refreshSnapshots() {
+        document.querySelectorAll('.snapshot-img').forEach(function(img) {
+            var site = img.getAttribute('data-site');
+            var camera = img.getAttribute('data-camera');
+            var baseUrl = "{{ url_for('camera_snapshot') }}";
+            img.src = baseUrl + "?site=" + encodeURIComponent(site) + "&camera_type=" + camera + "&_t=" + new Date().getTime();
+        });
+    }
+    var interval = document.querySelector('.focus-snapshot') ? 1500 : 4000;
+    setInterval(refreshSnapshots, interval);
+});
+</script>
+{% endblock %}

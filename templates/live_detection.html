@@ -1,0 +1,316 @@
+{% extends 'base.html' %}
+{% block title %}Détection live — Parking UCB{% endblock %}
+{% block extra_css %}
+<style>
+    #security-alert-banner {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0;
+        z-index: 1080;
+        padding: 1rem 1.25rem;
+        color: #fff;
+        text-align: center;
+        font-weight: 700;
+        font-size: 1.1rem;
+        box-shadow: 0 6px 24px rgba(0,0,0,.45);
+        animation: alert-pulse 0.9s ease-in-out infinite alternate;
+    }
+    #security-alert-banner.show { display: block; }
+    #security-alert-banner.type-banned {
+        background: linear-gradient(90deg, #8b1538, #c41e3a);
+        border-bottom: 3px solid #ffcc00;
+    }
+    #security-alert-banner.type-unknown {
+        background: linear-gradient(90deg, #b45309, #f59e0b);
+        border-bottom: 3px solid #fff3cd;
+    }
+    #security-alert-banner.type-forbidden_type {
+        background: linear-gradient(90deg, #7c2d12, #ea580c);
+        border-bottom: 3px solid #fed7aa;
+    }
+    @keyframes alert-pulse {
+        from { filter: brightness(1); }
+        to { filter: brightness(1.12); }
+    }
+    #security-alert-banner .plate { letter-spacing: .1em; font-size: 1.25rem; }
+    .contact-actions { margin-top: .5rem; }
+    .policy-badge { font-size: .85rem; }
+    
+    .stream-card {
+        background: #000000;
+        border-radius: 0.75rem;
+        overflow: hidden;
+        border: 1px solid var(--ps-border);
+    }
+    .stream-img {
+        width: 100%;
+        height: auto;
+        display: block;
+    }
+</style>
+{% endblock %}
+{% block content %}
+
+<div id="security-alert-banner" role="alert">
+    <div id="alert-title"><i class="bi bi-exclamation-octagon-fill me-2"></i><span id="alert-message"></span></div>
+    <div class="contact-actions" id="alert-contacts"></div>
+    <button type="button" class="btn btn-sm btn-warning mt-2" id="alert-dismiss">J'ai vu</button>
+</div>
+
+<div class="page-header mb-4">
+    <h1 class="h3 mb-1">Detection en temps réel (Double-lecture)</h1>
+    <p class="text-secondary mb-2">
+        Site : <strong>{{ site or session.site or '—' }}</strong>
+        {% if policy %}
+        <span class="badge bg-secondary policy-badge ms-1">Max etudiant {{ policy.max_hours_student }}h</span>
+        <span class="badge bg-secondary policy-badge">Acces {{ policy.access_start }}–{{ policy.access_end }}</span>
+        {% endif %}
+    </p>
+    <p class="text-secondary small mb-0">
+        <span class="badge bg-danger me-1">Rouge</span> plaque interdite &nbsp;
+        <span class="badge bg-warning text-dark me-1">Orange</span> plaque inconnue &nbsp;
+        <span class="badge bg-info text-dark">Bleu</span> type de vehicule interdit
+    </p>
+</div>
+
+{% if session.role == 'admin' %}
+<div class="mb-4">
+    <form method="get" class="row g-2 align-items-end">
+        <div class="col-auto">
+            <label class="form-label small mb-0" for="site">Changer de site</label>
+            <select class="form-select form-select-sm" id="site" name="site" onchange="this.form.submit()">
+                {% for s in ucb_sites %}
+                <option value="{{ s }}" {% if s == site %}selected{% endif %}>{{ s }}</option>
+                {% endfor %}
+            </select>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+<!-- Widget de controle de barriere -->
+<div class="card card-ps mb-4 border-accent-warning">
+    <div class="card-body p-3">
+        <div class="row align-items-center g-3">
+            <div class="col-md-6">
+                <div class="d-flex align-items-center gap-3">
+                    <div>
+                        <div class="small text-secondary">Portail Entree</div>
+                        <span id="gate-entry-badge" class="badge bg-secondary mt-1">Ferme</span>
+                        <span id="gate-entry-plate" class="small text-muted ms-2" style="display:none;">Plaque: <span id="gate-entry-plate-num" class="badge bg-dark"></span></span>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-success ms-auto btn-gate-trigger" data-direction="entry" data-action="OPEN">
+                        <i class="bi bi-unlock-fill me-1"></i> Ouvrir Entree
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6 border-start border-md-secondary" style="border-left: 1px solid var(--ps-border) !important;">
+                <div class="d-flex align-items-center gap-3 ps-md-3">
+                    <div>
+                        <div class="small text-secondary">Portail Sortie</div>
+                        <span id="gate-exit-badge" class="badge bg-secondary mt-1">Ferme</span>
+                        <span id="gate-exit-plate" class="small text-muted ms-2" style="display:none;">Plaque: <span id="gate-exit-plate-num" class="badge bg-dark"></span></span>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-success ms-auto btn-gate-trigger" data-direction="exit" data-action="OPEN">
+                        <i class="bi bi-unlock-fill me-1"></i> Ouvrir Sortie
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Double flux vidéo côte à côte -->
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="card card-ps overflow-hidden">
+            <div class="card-header py-2" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+                <strong class="small text-uppercase"><i class="bi bi-box-arrow-in-right text-success me-1"></i> Camera Entree (Exterieur)</strong>
+            </div>
+            <div class="card-body p-2 bg-black">
+                <div class="stream-card">
+                    <img src="{{ url_for('video_feed') }}?camera_type=entry{% if site %}&site={{ site|urlencode }}{% endif %}" alt="Flux Entree" class="stream-img">
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card card-ps overflow-hidden">
+            <div class="card-header py-2" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+                <strong class="small text-uppercase"><i class="bi bi-box-arrow-left text-danger me-1"></i> Camera Sortie (Interieur)</strong>
+            </div>
+            <div class="card-body p-2 bg-black">
+                <div class="stream-card">
+                    <img src="{{ url_for('video_feed') }}?camera_type=exit{% if site %}&site={{ site|urlencode }}{% endif %}" alt="Flux Sortie" class="stream-img">
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+    var lastAlertId = 0;
+    var activeSite = '{{ site or "" }}';
+    var audioCtx = null;
+    var banner = document.getElementById('security-alert-banner');
+    var msgEl = document.getElementById('alert-message');
+    var contactsEl = document.getElementById('alert-contacts');
+
+    function ensureAudio() {
+        if (!audioCtx) {
+            try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+        }
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(function(){});
+    }
+    document.body.addEventListener('click', ensureAudio, { once: true });
+
+    function beep(freq, gain, dur) {
+        if (!audioCtx) return;
+        var o = audioCtx.createOscillator();
+        var g = audioCtx.createGain();
+        o.type = 'square';
+        o.frequency.value = freq;
+        g.gain.value = gain;
+        o.connect(g);
+        g.connect(audioCtx.destination);
+        o.start();
+        setTimeout(function () { o.stop(); }, dur);
+    }
+
+    function playAlertSound(type) {
+        ensureAudio();
+        if (type === 'banned') {
+            beep(880, 0.14, 220);
+            setTimeout(function () { beep(660, 0.12, 220); }, 260);
+            setTimeout(function () { beep(880, 0.14, 220); }, 520);
+        } else if (type === 'unknown') {
+            beep(520, 0.1, 180);
+            setTimeout(function () { beep(520, 0.1, 180); }, 200);
+        } else {
+            beep(300, 0.12, 350);
+        }
+    }
+
+    document.getElementById('alert-dismiss').addEventListener('click', function () {
+        banner.classList.remove('show', 'type-banned', 'type-unknown', 'type-forbidden_type');
+    });
+
+    function waLink(phone, text) {
+        var p = (phone || '').replace(/\D/g, '');
+        if (p.indexOf('0') === 0) p = '243' + p.slice(1);
+        return 'https://wa.me/' + p + (text ? '?text=' + encodeURIComponent(text) : '');
+    }
+
+    function showAlert(d) {
+        banner.classList.remove('type-banned', 'type-unknown', 'type-forbidden_type');
+        banner.classList.add('type-' + (d.type || 'unknown'));
+        var plate = d.plate || '—';
+        if (d.type === 'banned') {
+            msgEl.textContent = 'VEHICULE INTERDIT — plaque ' + plate;
+        } else if (d.type === 'forbidden_type') {
+            msgEl.textContent = 'VEHICULE INTERDIT (bus / poids lourd) — ' + plate;
+        } else {
+            msgEl.textContent = 'PLAQUE NON ENREGISTREE — ' + plate;
+        }
+        contactsEl.innerHTML = '';
+        if (d.owner_phone) {
+            contactsEl.innerHTML += '<a class="btn btn-sm btn-light me-1" href="tel:' + d.owner_phone + '"><i class="bi bi-telephone"></i> Appeler</a>';
+            contactsEl.innerHTML += '<a class="btn btn-sm btn-success me-1" target="_blank" rel="noopener" href="' + waLink(d.owner_phone, 'Alerte parking UCB — vehicule ' + plate) + '"><i class="bi bi-whatsapp"></i> WhatsApp</a>';
+        }
+        banner.classList.add('show');
+        if (navigator.vibrate) {
+            try { navigator.vibrate(d.type === 'banned' ? [200,100,200,100,200] : [120,80,120]); } catch (e) {}
+        }
+    }
+
+    async function poll() {
+        try {
+            var r = await fetch('{{ url_for("api_security_alert") }}', { credentials: 'same-origin' });
+            if (!r.ok) return;
+            var d = await r.json();
+            if (typeof d.id === 'number' && d.id > lastAlertId && d.plate) {
+                lastAlertId = d.id;
+                showAlert(d);
+                playAlertSound(d.type || 'unknown');
+            }
+        } catch (e) {}
+    }
+
+    setInterval(poll, 1100);
+    poll();
+
+    // Polling de l'état de la barrière
+    function updateGateBadge(elId, plateBoxId, plateNumId, status, plate) {
+        var el = document.getElementById(elId);
+        var plateBox = document.getElementById(plateBoxId);
+        var plateNum = document.getElementById(plateNumId);
+        if (!el) return;
+
+        el.textContent = status.toUpperCase();
+        el.className = 'badge mt-1';
+        
+        if (status === 'closed') {
+            el.classList.add('bg-secondary');
+        } else if (status === 'opening' || status === 'closing') {
+            el.classList.add('bg-warning', 'text-dark');
+        } else if (status === 'open') {
+            el.classList.add('bg-success');
+        }
+
+        if (plate && status !== 'closed') {
+            plateNum.textContent = plate;
+            plateBox.style.display = 'inline';
+        } else {
+            plateBox.style.display = 'none';
+        }
+    }
+
+    async function pollGate() {
+        try {
+            var sParam = activeSite ? '?site=' + encodeURIComponent(activeSite) : '';
+            var r = await fetch('{{ url_for("api_gate_status") }}' + sParam, { credentials: 'same-origin' });
+            if (!r.ok) return;
+            var d = await r.json();
+            updateGateBadge('gate-entry-badge', 'gate-entry-plate', 'gate-entry-plate-num', d.entry_gate || 'closed', d.entry_plate);
+            updateGateBadge('gate-exit-badge', 'gate-exit-plate', 'gate-exit-plate-num', d.exit_gate || 'closed', d.exit_plate);
+        } catch (e) {}
+    }
+
+    // Contrôle manuel
+    document.querySelectorAll('.btn-gate-trigger').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            var direction = btn.getAttribute('data-direction');
+            var action = btn.getAttribute('data-action');
+            btn.disabled = true;
+            try {
+                var payload = {
+                    direction: direction,
+                    action: action,
+                    plate: 'MANUEL'
+                };
+                if (activeSite) {
+                    payload.site = activeSite;
+                }
+                var r = await fetch('{{ url_for("api_gate_control") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (r.ok) {
+                    showToast('Ouverture manuelle de la barriere declenchee.', 'success');
+                    pollGate();
+                }
+            } catch (e) {}
+            setTimeout(function() { btn.disabled = false; }, 2000);
+        });
+    });
+
+    setInterval(pollGate, 1000);
+    pollGate();
+})();
+</script>
+{% endblock %}

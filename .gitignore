@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# Database files
+parking.db
+*.sqlite3
+
+# Uploaded images
+uploads/*
+!uploads/.gitkeep
+
+# Config and credentials
+.env
+site_config.json
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

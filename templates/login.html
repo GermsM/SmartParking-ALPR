@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %}Connexion — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="login-card">
+    <div class="text-center mb-4">
+        <i class="bi bi-shield-lock text-primary" style="font-size: 2.5rem;"></i>
+        <h2 class="h4 mt-2 mb-1">Connexion</h2>
+        <p class="text-secondary small mb-0">Système de parking intelligent — UCB</p>
+        <p class="text-secondary small mt-2 mb-0">Les comptes <strong>gardiens</strong> sont créés par l'administrateur.
+        </p>
+    </div>
+
+    <form method="post" action="{{ url_for('auth.login') }}">
+        <div class="mb-3">
+            <label class="form-label" for="username">Nom d'utilisateur</label>
+            <input type="text" class="form-control" id="username" name="username" required autocomplete="username">
+        </div>
+        <div class="mb-4">
+            <label class="form-label" for="password">Mot de passe</label>
+            <input type="password" class="form-control" id="password" name="password" required
+                autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary w-100 py-2">Se connecter</button>
+    </form>
+    <p class="text-center small mt-3 mb-0">
+        <a href="{{ url_for('auth.forgot_password') }}" class="text-secondary">Mot de passe administrateur oublié ?</a>
+    </p>
+</div>
+
+{% endblock %}

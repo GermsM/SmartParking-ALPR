@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Export CSV — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+    <h1 class="h3 mb-1">Export des fréquences</h1>
+    <p class="text-secondary mb-0">
+        Téléchargez l'historique des visites (entrées et sorties) pour la période choisie.
+        Le fichier inclut la durée de stationnement et le nom du gardien en service le jour de l'entrée.
+        Format compatible Excel (CSV UTF-8, séparateur point-virgule).
+    </p>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="card card-ps">
+            <div class="card-body p-4">
+                <form method="get" action="{{ url_for('logs.export_frequency_csv') }}" class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="date_from">Date début</label>
+                        <input type="date" class="form-control" id="date_from" name="date_from" value="{{ default_from }}" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="date_to">Date fin</label>
+                        <input type="date" class="form-control" id="date_to" name="date_to" value="{{ default_to }}" required>
+                    </div>
+                    <div class="col-12">
+                        <div class="alert alert-info py-2 small mb-0">
+                            <i class="bi bi-info-circle me-1"></i>
+                            {% if session.role == 'gardien' %}
+                            Export limité à votre site : <strong>{{ session.site }}</strong>.
+                            {% else %}
+                            Export de tous les sites UCB.
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex flex-wrap gap-2 pt-2">
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-download"></i> Télécharger le CSV
+                        </button>
+                        <a href="{{ url_for('logs.view_logs') }}" class="btn btn-outline-light">Retour à l'historique</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}

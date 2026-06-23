@@ -1,0 +1,228 @@
+{% extends 'base.html' %}
+{% block title %}Tableau de bord — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+    <h1 class="h2 mb-1">Tableau de bord</h1>
+    <p class="lead mb-0">
+        Bonjour <strong>{{ session.full_name or session.username }}</strong>
+        <span class="badge bg-primary badge-role ms-1">{{ session.role }}</span>
+        {% if session.role != 'admin' and session.site %}
+            <span class="text-secondary">· {{ session.site }}</span>
+        {% endif %}
+    </p>
+</div>
+
+{% if session.role == 'admin' and pending_vehicle_count > 0 %}
+<div class="alert alert-warning d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-2 mb-4" role="status">
+    <div>
+        <i class="bi bi-hourglass-split me-1"></i>
+        <strong>{{ pending_vehicle_count }}</strong> vehicule(s) en attente de validation (ajoutes par un gardien).
+    </div>
+    <a href="{{ url_for('vehicles.list_vehicles') }}" class="btn btn-sm btn-dark flex-shrink-0">Voir et valider</a>
+</div>
+{% endif %}
+
+{% if session.role == 'gardien' %}
+<!-- Widget de controle de la barriere IP physique en temps reel -->
+<div class="card card-ps mb-4 border-accent-warning">
+    <div class="card-body p-4">
+        <h3 class="h6 text-uppercase text-secondary mb-3"><i class="bi bi-shield-lock-fill me-1"></i> Controle en temps reel des barrières (Barrière IP)</h3>
+        <div class="row align-items-center g-3">
+            <div class="col-md-6">
+                <div class="d-flex align-items-center gap-3">
+                    <div>
+                        <div class="small text-secondary">Barriere Entree (IP)</div>
+                        <span id="gate-entry-badge" class="badge bg-secondary fs-6 mt-1">Ferme</span>
+                        <div id="gate-entry-plate" class="small text-muted mt-1" style="display:none;">Plaque: <span id="gate-entry-plate-num" class="badge bg-dark"></span></div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-success ms-auto btn-gate-trigger" data-direction="entry" data-action="OPEN">
+                        <i class="bi bi-unlock-fill me-1"></i> Ouverture manuelle
+                    </button>
+                </div>
+            </div>
+            <div class="col-md-6 border-start border-md-secondary" style="border-left: 1px solid var(--ps-border) !important;">
+                <div class="d-flex align-items-center gap-3 ps-md-3">
+                    <div>
+                        <div class="small text-secondary">Barriere Sortie (IP)</div>
+                        <span id="gate-exit-badge" class="badge bg-secondary fs-6 mt-1">Ferme</span>
+                        <div id="gate-exit-plate" class="small text-muted mt-1" style="display:none;">Plaque: <span id="gate-exit-plate-num" class="badge bg-dark"></span></div>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-success ms-auto btn-gate-trigger" data-direction="exit" data-action="OPEN">
+                        <i class="bi bi-unlock-fill me-1"></i> Ouverture manuelle
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div class="row g-3 g-lg-4 mb-4">
+    <div class="col-6 col-lg-3">
+        <div class="card card-ps h-100 border-accent-primary">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-geo-alt text-primary"></i> Presents</div>
+                <div class="metric text-primary">{{ kpi.vehicles_present }}</div>
+                <div class="small text-secondary mt-1">Derniere action = entree</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card card-ps h-100 border-accent-success">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-box-arrow-in-right text-success"></i> Entrees aujourd'hui</div>
+                <div class="metric text-success">{{ kpi.access_today }}</div>
+                <div class="small text-secondary mt-1">UTC minuit -> maintenant</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card card-ps h-100 border-accent-warning">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-exclamation-triangle text-warning"></i> Alertes</div>
+                <div class="metric text-warning">{{ kpi.alerts_today }}</div>
+                <div class="small text-secondary mt-1">Statuts non autorises (jour)</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card card-ps h-100 border-accent-danger">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-slash-circle text-danger"></i> Interdits (jour)</div>
+                <div class="metric text-danger">{{ kpi.forbidden_today }}</div>
+                <div class="small text-secondary mt-1">Tentatives "banned"</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 g-lg-4 mb-4">
+    <div class="col-md-6 col-lg-4">
+        <div class="card card-ps h-100 border-accent-muted">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-pie-chart text-info"></i> Taux d'occupation</div>
+                <div class="metric text-info">{{ kpi.occupation_pct }}%</div>
+                <div class="small text-secondary mt-1">
+                    {% if session.role == 'admin' %}
+                    Agrege tous sites - voir par gardien pour le detail
+                    {% else %}
+                    Sur {{ kpi.capacity }} places - {{ kpi.site_label }}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-lg-4">
+        <div class="card card-ps h-100 border-accent-muted">
+            <div class="card-body">
+                <div class="card-label mb-1"><i class="bi bi-check2-circle"></i> Vehicules actifs</div>
+                <div class="metric">{{ kpi.registered_active }}</div>
+                <div class="small text-secondary mt-1">
+                    {% if session.role != 'admin' %}
+                    {{ kpi.registered_total }} au total sur {{ kpi.site_label }} (liste Vehicules)
+                    {% else %}
+                    Tous sites UCB
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card card-ps h-100">
+            <div class="card-body d-flex flex-column justify-content-center">
+                <div class="card-label mb-2">Raccourcis</div>
+                <div class="d-flex flex-wrap gap-2">
+                    {% if session.role == 'admin' %}
+                    <a href="{{ url_for('admin_videos') }}" class="btn btn-success"><i class="bi bi-camera-reels"></i> Surveillance</a>
+                    {% else %}
+                    <a href="{{ url_for('live') }}" class="btn btn-success"><i class="bi bi-camera-video"></i> Live</a>
+                    {% endif %}
+                    <a href="{{ url_for('vehicles.list_vehicles') }}" class="btn btn-primary"><i class="bi bi-truck-front"></i> Vehicules</a>
+                    <a href="{{ url_for('logs.view_logs') }}" class="btn btn-shortcut-outline"><i class="bi bi-clock-history"></i> Historique</a>
+                    <a href="{{ url_for('logs.export_frequency_page') }}" class="btn btn-outline-info"><i class="bi bi-download"></i> CSV</a>
+                    {% if session.role == 'admin' %}
+                    <a href="{{ url_for('admin_staff.list_gardiens') }}" class="btn btn-outline-warning"><i class="bi bi-people"></i> Gardiens</a>
+                    <a href="{{ url_for('site_policy.list_policies') }}" class="btn btn-outline-info"><i class="bi bi-sliders"></i> Politiques</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+{% if session.role == 'gardien' %}
+<script>
+(function() {
+    function updateBadge(elId, plateBoxId, plateNumId, status, plate) {
+        var el = document.getElementById(elId);
+        var plateBox = document.getElementById(plateBoxId);
+        var plateNum = document.getElementById(plateNumId);
+        if (!el) return;
+
+        el.textContent = status.toUpperCase();
+        el.className = 'badge fs-6 mt-1';
+        
+        if (status === 'closed') {
+            el.classList.add('bg-secondary');
+        } else if (status === 'opening' || status === 'closing') {
+            el.classList.add('bg-warning', 'text-dark');
+        } else if (status === 'open') {
+            el.classList.add('bg-success');
+        }
+
+        if (plate && status !== 'closed') {
+            plateNum.textContent = plate;
+            plateBox.style.display = 'block';
+        } else {
+            plateBox.style.display = 'none';
+        }
+    }
+
+    async function pollGateStatus() {
+        try {
+            var r = await fetch('{{ url_for("api_gate_status") }}', { credentials: 'same-origin' });
+            if (!r.ok) return;
+            var d = await r.json();
+            updateBadge('gate-entry-badge', 'gate-entry-plate', 'gate-entry-plate-num', d.entry_gate || 'closed', d.entry_plate);
+            updateBadge('gate-exit-badge', 'gate-exit-plate', 'gate-exit-plate-num', d.exit_gate || 'closed', d.exit_plate);
+        } catch (e) {
+            console.error('Erreur polling barriere:', e);
+        }
+    }
+
+    // Gestionnaires de clic pour le forçage manuel
+    document.querySelectorAll('.btn-gate-trigger').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            var direction = btn.getAttribute('data-direction');
+            var action = btn.getAttribute('data-action');
+            
+            btn.disabled = true;
+            try {
+                var r = await fetch('{{ url_for("api_gate_control") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ direction: direction, action: action, plate: 'MANUEL' })
+                });
+                if (r.ok) {
+                    showToast('Commande d\'ouverture manuelle envoyee.', 'success');
+                    pollGateStatus();
+                } else {
+                    showToast('Erreur lors du controle de la barriere.', 'danger');
+                }
+            } catch (e) {
+                showToast('Impossible de contacter la barriere.', 'danger');
+            }
+            setTimeout(function() { btn.disabled = false; }, 2000);
+        });
+    });
+
+    setInterval(pollGateStatus, 1000);
+    pollGateStatus();
+})();
+</script>
+{% endif %}
+{% endblock %}

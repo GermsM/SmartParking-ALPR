@@ -1,0 +1,255 @@
+{% extends 'base.html' %}
+{% block title %}Véhicules — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-4">
+    <div class="page-header mb-0">
+        <h1 class="h3 mb-1">Gestion des véhicules</h1>
+        <p class="text-secondary mb-0 small">{% if session.role == 'admin' %}Tous les sites UCB{% else %}Véhicules et demandes pour votre site{% endif %}</p>
+    </div>
+    <a href="{{ url_for('vehicles.add_vehicle') }}" class="btn btn-success flex-shrink-0">
+        <i class="bi bi-plus-lg"></i> Ajouter un véhicule
+    </a>
+</div>
+
+<div class="card card-ps">
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <span class="input-group-text bg-dark border-secondary text-secondary"><i class="bi bi-search"></i></span>
+                    <input type="text" id="vehicleSearch" class="form-control" placeholder="Rechercher par plaque, propriétaire ou modèle...">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <select id="vehicleStatusFilter" class="form-select">
+                    <option value="">Tous les statuts</option>
+                    <option value="active">Actif</option>
+                    <option value="pending">En attente</option>
+                    <option value="banned">Interdit</option>
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover table-darkish table-sm mb-0 align-middle" id="vehicleTable">
+                <thead>
+                    <tr>
+                        <th>Plaque</th>
+                        <th>Modèle</th>
+                        <th>Propriétaire</th>
+                        <th>Contact</th>
+                        <th>Adresse</th>
+                        <th>Fonction</th>
+                        <th>Site</th>
+                        <th>Statut</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for v in vehicles %}
+                    <tr>
+                        <td><strong>{{ v.plate_number }}</strong></td>
+                        <td class="small">{{ v.vehicle_model or '—' }}</td>
+                        <td>{{ v.owner_name }}</td>
+                        <td class="small">
+                            {% if v.owner_phone %}<div><a href="tel:{{ v.owner_phone }}" class="text-decoration-none"><i class="bi bi-telephone"></i> {{ v.owner_phone }}</a></div>{% endif %}
+                            {% if v.owner_email %}<div class="text-truncate" style="max-width:10rem;" title="{{ v.owner_email }}"><i class="bi bi-envelope"></i> {{ v.owner_email }}</div>{% endif %}
+                            {% if v.owner_phone %}
+                            {% set wa_phone = v.owner_phone|replace(' ', '')|replace('+', '') %}
+                            <div><a href="https://wa.me/{% if wa_phone.startswith('0') %}243{{ wa_phone[1:] }}{% else %}{{ wa_phone }}{% endif %}?text={{ ('Bonjour, gardien parking UCB — véhicule ' ~ v.plate_number)|urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-success py-0 px-1"><i class="bi bi-whatsapp"></i> WhatsApp</a></div>
+                            {% endif %}
+                            {% if not v.owner_phone and not v.owner_email %}—{% endif %}
+                        </td>
+                        <td class="small" style="max-width:12rem;">{{ v.owner_address or '—' }}</td>
+                        <td class="small">{{ v.function or '—' }}</td>
+                        <td class="small">{{ v.site_authorized or 'Tous' }}</td>
+                        <td>
+                            <span class="badge bg-{{ 'success' if v.status=='active' else 'warning' if v.status=='pending' else 'danger' }}">
+                                {{ v.status }}
+                            </span>
+                        </td>
+                        <td class="text-end">
+                            {% if session.role == 'admin' %}
+                            <div class="dropdown vehicle-actions-menu">
+                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                    Actions
+                                </button>
+                                <ul class="dropdown-menu dropdown-menu-end">
+                                    <li><a class="dropdown-item" href="{{ url_for('vehicles.edit_vehicle', id=v.id) }}"><i class="bi bi-pencil me-2"></i>Modifier</a></li>
+                                    {% if v.status == 'pending' %}
+                                    <li>
+                                        <form method="post" action="{{ url_for('vehicles.validate_vehicle', id=v.id) }}" class="px-3 py-1">
+                                            <button type="submit" name="action" value="approve" class="dropdown-item text-success px-0"><i class="bi bi-check-lg me-2"></i>Approuver</button>
+                                        </form>
+                                    </li>
+                                    <li>
+                                        <form method="post" action="{{ url_for('vehicles.validate_vehicle', id=v.id) }}" class="px-3 py-1">
+                                            <button type="submit" name="action" value="ban" class="dropdown-item text-danger px-0"><i class="bi bi-slash-circle me-2"></i>Refuser / bannir</button>
+                                        </form>
+                                    </li>
+                                    {% endif %}
+                                    {% if v.status == 'active' %}
+                                    <li>
+                                        <button type="button" class="dropdown-item text-danger btn-open-ban" data-plate="{{ v.plate_number }}" data-ban-url="{{ url_for('vehicles.ban_vehicle', id=v.id) }}">
+                                            <i class="bi bi-slash-circle me-2"></i>Bannir
+                                        </button>
+                                    </li>
+                                    {% endif %}
+                                    {% if v.status == 'banned' %}
+                                    <li>
+                                        <button type="button" class="dropdown-item text-success btn-open-reactivate" data-plate="{{ v.plate_number }}" data-url="{{ url_for('vehicles.reactivate_vehicle', id=v.id) }}">
+                                            <i class="bi bi-arrow-counterclockwise me-2"></i>Réactiver
+                                        </button>
+                                    </li>
+                                    {% endif %}
+                                    <li><hr class="dropdown-divider" style="border-color: var(--ps-border);"></li>
+                                    <li>
+                                        <button type="button" class="dropdown-item text-danger btn-open-delete" data-plate="{{ v.plate_number }}" data-delete-url="{{ url_for('vehicles.delete_vehicle', id=v.id) }}">
+                                            <i class="bi bi-trash me-2"></i>Supprimer
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9" class="text-center text-secondary py-5">Aucun véhicule enregistré</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if session.role == 'admin' %}
+<div class="modal fade" id="confirmDeleteModal" tabindex="-1" aria-labelledby="confirmDeleteTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title" id="confirmDeleteTitle">Supprimer ce véhicule ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Cette action est <strong>irréversible</strong>.</p>
+                <p class="mb-0 mt-2">Plaque : <strong id="confirmDeletePlate"></strong></p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmDeleteForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-danger">Supprimer</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="confirmBanModal" tabindex="-1" aria-labelledby="confirmBanTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title" id="confirmBanTitle">Interdire ce véhicule ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Le véhicule sera marqué comme <strong>interdit</strong> au parking.</p>
+                <p class="mb-0 mt-2">Plaque : <strong id="confirmBanPlate"></strong></p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmBanForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-danger">Confirmer l'interdiction</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="confirmReactivateModal" tabindex="-1" aria-labelledby="confirmReactivateTitle" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title" id="confirmReactivateTitle"><i class="bi bi-arrow-counterclockwise text-success me-2"></i>Réactiver ce véhicule ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Le véhicule retrouvera le statut <strong>actif</strong> et pourra accéder au parking.</p>
+                <p class="mb-0 mt-2">Plaque : <strong id="confirmReactivatePlate"></strong></p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmReactivateForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-success">Réactiver</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Filtre recherche véhicules
+(function() {
+    var searchInput = document.getElementById('vehicleSearch');
+    var statusFilter = document.getElementById('vehicleStatusFilter');
+    var table = document.getElementById('vehicleTable');
+    if (!searchInput || !table) return;
+
+    function filterTable() {
+        var query = (searchInput.value || '').toLowerCase();
+        var statusVal = (statusFilter ? statusFilter.value : '').toLowerCase();
+        var rows = table.querySelectorAll('tbody tr');
+        rows.forEach(function(row) {
+            if (row.querySelector('td[colspan]')) return;
+            var text = (row.textContent || '').toLowerCase();
+            var statusCell = row.querySelector('td:nth-child(8)');
+            var rowStatus = statusCell ? (statusCell.textContent || '').trim().toLowerCase() : '';
+            var matchesSearch = !query || text.indexOf(query) !== -1;
+            var matchesStatus = !statusVal || rowStatus.indexOf(statusVal) !== -1;
+            row.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
+        });
+    }
+
+    searchInput.addEventListener('input', filterTable);
+    if (statusFilter) statusFilter.addEventListener('change', filterTable);
+})();
+
+{% if session.role == 'admin' %}
+(function () {
+    var delModal = document.getElementById('confirmDeleteModal');
+    var banModal = document.getElementById('confirmBanModal');
+    var reactModal = document.getElementById('confirmReactivateModal');
+    if (!delModal || !banModal || typeof bootstrap === 'undefined') return;
+
+    document.querySelectorAll('.btn-open-delete').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.getElementById('confirmDeletePlate').textContent = btn.getAttribute('data-plate') || '';
+            document.getElementById('confirmDeleteForm').setAttribute('action', btn.getAttribute('data-delete-url') || '#');
+            new bootstrap.Modal(delModal).show();
+        });
+    });
+    document.querySelectorAll('.btn-open-ban').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            document.getElementById('confirmBanPlate').textContent = btn.getAttribute('data-plate') || '';
+            document.getElementById('confirmBanForm').setAttribute('action', btn.getAttribute('data-ban-url') || '#');
+            new bootstrap.Modal(banModal).show();
+        });
+    });
+    if (reactModal) {
+        document.querySelectorAll('.btn-open-reactivate').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                document.getElementById('confirmReactivatePlate').textContent = btn.getAttribute('data-plate') || '';
+                document.getElementById('confirmReactivateForm').setAttribute('action', btn.getAttribute('data-url') || '#');
+                new bootstrap.Modal(reactModal).show();
+            });
+        });
+    }
+})();
+{% endif %}
+</script>
+{% endblock %}

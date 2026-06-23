@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+{% block title %}Gestion des sites — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3 mb-4">
+    <div class="page-header mb-0">
+        <h1 class="h3 mb-1">Gestion des sites et politiques</h1>
+        <p class="text-secondary mb-0">Configurez les capacites, les flux de cameras (Entree / Sortie) et les regles d'acces par site.</p>
+    </div>
+    <button type="button" class="btn btn-primary btn-sm flex-shrink-0" data-bs-toggle="modal" data-bs-target="#addSiteModal">
+        <i class="bi bi-plus-circle me-1"></i> Ajouter un site
+    </button>
+</div>
+
+<div class="row g-4">
+    {% for s in sites %}
+    <div class="col-lg-6">
+        <div class="card card-ps h-100 border-accent-primary">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <h2 class="h5 mb-0 font-weight-bold text-white">{{ s.name }}</h2>
+                        <span class="badge bg-secondary mt-1">Code: {{ s.code }}</span>
+                    </div>
+                    <span class="badge bg-info px-2 py-1">{{ s.capacity }} places</span>
+                </div>
+                
+                <hr class="my-3" style="border-color: var(--ps-border);">
+
+                <div class="row g-3 mb-4">
+                    <div class="col-6">
+                        <div class="small text-secondary">Max Etudiant</div>
+                        <div class="font-weight-bold">{{ s.max_hours_student }} h</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="small text-secondary">Max Visiteur</div>
+                        <div class="font-weight-bold">{{ s.max_hours_visitor }} h</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="small text-secondary">Heures d'acces</div>
+                        <div class="font-weight-bold">{{ s.access_start }} – {{ s.access_end }}</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="small text-secondary">Seuil dormeur</div>
+                        <div class="font-weight-bold">{{ s.long_stay_hours }} h</div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <div class="small text-secondary mb-1">Camera Entree (Simulation)</div>
+                    <code class="text-truncate d-block bg-dark bg-opacity-25 p-2 rounded text-info small" style="border: 1px solid var(--ps-border);">{{ s.camera_url_entry or '— Aucun flux' }}</code>
+                </div>
+
+                <div class="mb-4">
+                    <div class="small text-secondary mb-1">Camera Sortie (Simulation)</div>
+                    <code class="text-truncate d-block bg-dark bg-opacity-25 p-2 rounded text-info small" style="border: 1px solid var(--ps-border);">{{ s.camera_url_exit or '— Aucun flux' }}</code>
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editModal-{{ s.id }}">
+                        <i class="bi bi-pencil me-1"></i> Modifier
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-danger btn-delete-site" data-site-name="{{ s.name }}" data-delete-url="{{ url_for('site_policy.delete_site', site_id=s.id) }}">
+                        <i class="bi bi-trash me-1"></i> Supprimer
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Modifier Site -->
+    <div class="modal fade" id="editModal-{{ s.id }}" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+                <form method="post" action="{{ url_for('site_policy.update_site', site_id=s.id) }}">
+                    <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                        <h5 class="modal-title"><i class="bi bi-pencil-square text-primary me-2"></i>Modifier le site : {{ s.name }}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+                    </div>
+                    <div class="modal-body p-4">
+                        <div class="row g-3">
+                            <div class="col-md-8">
+                                <label class="form-label small">Nom du site</label>
+                                <input type="text" class="form-control" name="name" value="{{ s.name }}" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Code trigramme</label>
+                                <input type="text" class="form-control" name="code" value="{{ s.code }}" required maxlength="10">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Capacite du parking</label>
+                                <input type="number" class="form-control" name="capacity" value="{{ s.capacity }}" required min="1">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Max heures etudiant</label>
+                                <input type="number" class="form-control" name="max_hours_student" value="{{ s.max_hours_student }}" required min="1" max="24">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small">Max heures visiteur</label>
+                                <input type="number" class="form-control" name="max_hours_visitor" value="{{ s.max_hours_visitor }}" required min="1" max="24">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Heure debut acces</label>
+                                <input type="time" class="form-control" name="access_start" value="{{ s.access_start }}" required>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Heure fin acces</label>
+                                <input type="time" class="form-control" name="access_end" value="{{ s.access_end }}" required>
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">Seuil d'alerte vehicule dormeur (heures)</label>
+                                <input type="number" class="form-control" name="long_stay_hours" value="{{ s.long_stay_hours }}" required min="1" max="168">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">URL Camera Entree (IP Webcam ou chemin de video locale)</label>
+                                <input type="text" class="form-control" name="camera_url_entry" value="{{ s.camera_url_entry or '' }}" placeholder="ex. uploads/video_entree.mp4">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">URL Camera Sortie (IP Webcam ou chemin de video locale)</label>
+                                <input type="text" class="form-control" name="camera_url_exit" value="{{ s.camera_url_exit or '' }}" placeholder="ex. uploads/video_sortie.mp4">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                        <button type="submit" class="btn btn-primary">Enregistrer les modifications</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-12 text-center text-secondary py-5">Aucun site disponible. Cliquez sur "Ajouter un site" ci-dessus.</div>
+    {% endfor %}
+</div>
+
+<!-- Modal Ajouter Site -->
+<div class="modal fade" id="addSiteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <form method="post" action="{{ url_for('site_policy.create_site') }}">
+                <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                    <h5 class="modal-title"><i class="bi bi-plus-circle text-primary me-2"></i>Ajouter un nouveau site</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3">
+                        <div class="col-md-8">
+                            <label class="form-label small">Nom du site</label>
+                            <input type="text" class="form-control" name="name" required placeholder="ex. Site de Kalambo">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Code trigramme</label>
+                            <input type="text" class="form-control" name="code" required maxlength="10" placeholder="ex. KAL">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Capacite du parking</label>
+                            <input type="number" class="form-control" name="capacity" value="30" required min="1">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Max heures etudiant</label>
+                            <input type="number" class="form-control" name="max_hours_student" value="8" required min="1" max="24">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small">Max heures visiteur</label>
+                            <input type="number" class="form-control" name="max_hours_visitor" value="4" required min="1" max="24">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Heure debut acces</label>
+                            <input type="time" class="form-control" name="access_start" value="06:00" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Heure fin acces</label>
+                            <input type="time" class="form-control" name="access_end" value="22:00" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small">Seuil d'alerte vehicule dormeur (heures)</label>
+                            <input type="number" class="form-control" name="long_stay_hours" value="48" required min="1" max="168">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small">URL Camera Entree (IP Webcam ou chemin de video locale)</label>
+                            <input type="text" class="form-control" name="camera_url_entry" placeholder="ex. uploads/video_entree.mp4">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small">URL Camera Sortie (IP Webcam ou chemin de video locale)</label>
+                            <input type="text" class="form-control" name="camera_url_exit" placeholder="ex. uploads/video_sortie.mp4">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                    <button type="submit" class="btn btn-primary">Creer le site</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+</div>
+
+<!-- Modal confirmation suppression site -->
+<div class="modal fade" id="confirmDeleteSiteModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>Supprimer le site ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Cette action est <strong>irréversible</strong>.</p>
+                <p class="mb-0 mt-2">Site : <strong id="confirmDeleteSiteName"></strong></p>
+                <p class="text-secondary small mt-2 mb-0"><i class="bi bi-info-circle"></i> Tous les utilisateurs, véhicules et logs liés à ce site seront détachés.</p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmDeleteSiteForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-danger"><i class="bi bi-trash me-1"></i>Supprimer définitivement</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    var modal = document.getElementById('confirmDeleteSiteModal');
+    if (!modal) return;
+    document.querySelectorAll('.btn-delete-site').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.getElementById('confirmDeleteSiteName').textContent = btn.getAttribute('data-site-name') || '';
+            document.getElementById('confirmDeleteSiteForm').setAttribute('action', btn.getAttribute('data-delete-url') || '#');
+            new bootstrap.Modal(modal).show();
+        });
+    });
+});
+</script>
+{% endblock %}
+{% endblock %}

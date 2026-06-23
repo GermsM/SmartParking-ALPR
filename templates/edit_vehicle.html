@@ -1,0 +1,83 @@
+{% extends 'base.html' %}
+{% block title %}Modifier {{ vehicle.plate_number }} — Parking UCB{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+    <h1 class="h3 mb-1">Modifier le véhicule</h1>
+    <p class="text-secondary mb-0">Plaque <strong>{{ vehicle.plate_number }}</strong></p>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-xl-9">
+        <div class="card card-ps">
+            <div class="card-body p-4">
+                <form method="post">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label">Plaque</label>
+                            <input type="text" class="form-control" value="{{ vehicle.plate_number }}" disabled>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="vehicle_model">Marque / modèle</label>
+                            <input type="text" class="form-control" id="vehicle_model" name="vehicle_model" value="{{ vehicle.vehicle_model or '' }}" placeholder="ex. Toyota RAV4">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_name">Propriétaire</label>
+                            <input type="text" class="form-control" id="owner_name" name="owner_name" value="{{ vehicle.owner_name }}" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_phone">Téléphone</label>
+                            <input type="tel" class="form-control" id="owner_phone" name="owner_phone" value="{{ vehicle.owner_phone or '' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="owner_email">E-mail</label>
+                            <input type="email" class="form-control" id="owner_email" name="owner_email" value="{{ vehicle.owner_email or '' }}">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="vehicle_type">Type</label>
+                            <select class="form-select" id="vehicle_type" name="vehicle_type">
+                                <option value="auto" {% if (vehicle.vehicle_type or 'auto') == 'auto' %}selected{% endif %}>Automobile</option>
+                                <option value="moto" {% if vehicle.vehicle_type == 'moto' %}selected{% endif %}>Moto</option>
+                                <option value="sans_plaque" {% if vehicle.vehicle_type == 'sans_plaque' %}selected{% endif %}>Sans plaque (UCB)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label" for="function">Fonction</label>
+                            <input type="text" class="form-control" id="function" name="function" value="{{ vehicle.function or '' }}">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="owner_address">Adresse</label>
+                            <input type="text" class="form-control" id="owner_address" name="owner_address" value="{{ vehicle.owner_address or '' }}">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="site_authorized">Site autorisé</label>
+                            <select class="form-select" id="site_authorized" name="site_authorized">
+                                <option value="" {% if not vehicle.site_authorized %}selected{% endif %}>Tous les sites</option>
+                                {% if vehicle.site_authorized and vehicle.site_authorized not in ucb_sites %}
+                                <option value="{{ vehicle.site_authorized }}" selected>{{ vehicle.site_authorized }} (ancien libellé)</option>
+                                {% endif %}
+                                {% for s in ucb_sites %}
+                                <option value="{{ s }}" {% if vehicle.site_authorized == s %}selected{% endif %}>{{ s }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="status">Statut</label>
+                            <select class="form-select" id="status" name="status">
+                                <option value="active" {% if vehicle.status == 'active' %}selected{% endif %}>Actif</option>
+                                <option value="pending" {% if vehicle.status == 'pending' %}selected{% endif %}>En attente</option>
+                                <option value="banned" {% if vehicle.status == 'banned' %}selected{% endif %}>Interdit</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-4">
+                        <button type="submit" class="btn btn-primary">Enregistrer</button>
+                        <a href="{{ url_for('vehicles.list_vehicles') }}" class="btn btn-outline-secondary">Retour</a>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
