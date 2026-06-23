@@ -202,6 +202,8 @@ Les commandes réseau sont exécutées dans des **threads séparés** pour ne pa
 
 E-mails asynchrones aux propriétaires : enregistrement, validation admin, bannissement, réactivation, mise à jour, stationnement prolongé (dormeur), alerte sécurité. Config SMTP dans `config.yaml` (sinon simulé dans la console).
 
+---
+
 ## Alertes de Sécurité (Temps Réel)
 
 - **Bannière colorée** : rouge (interdit), orange (inconnu), bleu (type interdit) avec pulsation
@@ -209,7 +211,6 @@ E-mails asynchrones aux propriétaires : enregistrement, validation admin, banni
 - **Vibration mobile** : `navigator.vibrate` pour les appareils compatibles
 - **Contacts rapides** : boutons Appel et WhatsApp du propriétaire dans la bannière
 - **Polling** : `/api/security/alert` toutes les 1.1s pour mise à jour instantanée
-```
 
 ---
 
