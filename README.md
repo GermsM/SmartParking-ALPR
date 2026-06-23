@@ -198,6 +198,50 @@ Les commandes réseau sont exécutées dans des **threads séparés** pour ne pa
 
 ---
 
+## Notifications Automatiques par E-mail
+
+Le système envoie des e-mails automatisés aux propriétaires de véhicules pour toutes les étapes importantes du cycle de vie. Les e-mails sont expédiés dans un **thread d'arrière-plan** pour ne pas ralentir l'interface.
+
+### Types d'e-mails
+
+| Événement | Fonction | Déclencheur |
+|-----------|----------|-------------|
+| **Enregistrement initial** | `notify_owner_registration` | À l'ajout d'un véhicule — message différent selon que le statut est `pending` ou `active` |
+| **Validation par admin** | `notify_owner_registration` | Quand l'admin approuve un véhicule en attente (`vehicles.py:validate_vehicle`) |
+| **Refus / Bannissement** | `notify_owner_banned` | Quand un véhicule est banni par l'admin ou automatiquement |
+| **Réactivation** | `notify_owner_reactivated` | Quand un véhicule banni est réautorisé |
+| **Mise à jour du dossier** | `notify_owner_profile_updated` | Quand l'admin modifie les informations du propriétaire ou du véhicule |
+| **Stationnement prolongé (dormeur)** | `notify_owner_long_stay` | Quand un véhicule dépasse le seuil `long_stay_hours` configuré pour le site. Vérifié toutes les 60s par le thread de fond |
+| **Alerte sécurité** | `notify_owner_unauthorized` | En cas de détection d'un véhicule non autorisé ou interdit |
+
+### Architecture d'envoi
+
+```
+┌──────────────┐    Thread    ┌──────────────────────┐
+│  Flask App   │ ───────────▶ │  send_owner_email()  │
+│  (instantané)│  asynchrone  │  (thread daemon)     │
+└──────────────┘              └──────────────────────┘
+                                      │
+                        ┌─────────────┴─────────────┐
+                        ▼                           ▼
+              ┌──────────────────┐       ┌──────────────────┐
+              │  SMTP configuré  │       │ SMTP non config. │
+              │  Envoi réel      │       │ Log simulé       │
+              └──────────────────┘       └──────────────────┘
+```
+
+Si le serveur SMTP n'est pas configuré dans `config.yaml`, les e-mails sont **simulés** (affichés dans la console). La configuration SMTP se fait via :
+
+```yaml
+SMTP_HOST: smtp.gmail.com
+SMTP_PORT: 587
+SMTP_USER: votre.email@gmail.com
+SMTP_PASSWORD: votre_mdp
+SMTP_FROM: parking@ucb.ac.cd
+```
+
+---
+
 ## Résilience (Coupures Électriques)
 
 Face aux coupures fréquentes dans la région de Bukavu, le système intègre :
