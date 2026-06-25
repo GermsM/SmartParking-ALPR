@@ -9,6 +9,7 @@ import re
 import threading
 import urllib.request
 import urllib.parse
+import subprocess
 from datetime import datetime
 
 from access_logging import (
@@ -106,6 +107,8 @@ def _normalize_url(url: str) -> str:
        - Enleve les espaces superflus
     """
     u = url.strip()
+    if u.startswith("rtsp://"):
+        return u
     if u and not u.startswith("http://") and not u.startswith("https://"):
         if re.match(r"^\d+\.\d+\.\d+\.\d+", u) or re.match(r"^[a-zA-Z0-9.-]+\.(local|lan)$", u):
             u = "http://" + u
@@ -144,11 +147,13 @@ class CameraStream:
         self.success = False     # True si une frame valide est disponible
         self.running = True      # Le thread doit continuer
         self.is_http = self.url.startswith("http://") or self.url.startswith("https://")
+        self.is_rtsp = self.url.startswith("rtsp://")
         self.http_stream = None  # Connexion HTTP pour MJPEG
         self.http_buffer = b""   # Buffer d'accumulation MJPEG
+        self.ffmpeg_process = None
         self.lock = threading.Lock()
         self.consecutive_errors = 0
-        print(f"[CameraStream] Initialisation avec URL: {self.url}")
+        print(f"[CameraStream] Initialisation avec URL: {self.url} (http={self.is_http}, rtsp={self.is_rtsp})")
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
 
@@ -202,6 +207,15 @@ class CameraStream:
     def _update(self):
         """Boucle principale du thread. Alterne entre lecture HTTP MJPEG et VideoCapture OpenCV."""
         while self.running:
+            if self.is_rtsp:
+                success, frame = self._read_rtsp_frame()
+                with self.lock:
+                    if success:
+                        self.frame = frame
+                        self.success = True
+                    else:
+                        self.success = False
+                continue
             if self.is_http:
                 success, frame = self._read_http_frame()
                 with self.lock:
@@ -246,6 +260,84 @@ class CameraStream:
                     self.cap = None
                     time.sleep(2.0)
 
+    def _read_rtsp_frame(self):
+        """Lit une frame depuis un flux RTSP via FFmpeg en pipe image2pipe (MJPEG)."""
+        try:
+            if self.ffmpeg_process is None:
+                print(f"[CameraStream] Lancement FFmpeg pour RTSP: {self.url}")
+                startupinfo = None
+                if hasattr(subprocess, 'STARTUPINFO'):
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                self.ffmpeg_process = subprocess.Popen(
+                    [
+                        "ffmpeg",
+                        "-rtsp_transport", "tcp",
+                        "-i", self.url,
+                        "-f", "image2pipe",
+                        "-vcodec", "mjpeg",
+                        "-qscale:v", "2",
+                        "-an",
+                        "-",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    bufsize=10 ** 8,
+                    startupinfo=startupinfo,
+                )
+                print(f"[CameraStream] FFmpeg PID {self.ffmpeg_process.pid} pour {self.url}")
+                self.http_buffer = b""
+
+            buf = self.http_buffer
+            while self.running:
+                chunk = self.ffmpeg_process.stdout.read(16384)
+                if not chunk:
+                    raise ConnectionError("Fin du pipe FFmpeg")
+                buf += chunk
+                a = buf.find(b"\xff\xd8")
+                b = buf.find(b"\xff\xd9")
+                if a != -1 and b != -1 and b > a:
+                    jpg = buf[a:b + 2]
+                    self.http_buffer = buf[b + 2:]
+                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        self.consecutive_errors = 0
+                        frame = _rotate_to_portrait(frame)
+                        return True, frame
+                    continue
+                if len(buf) > 5_000_000:
+                    buf = b""
+            self.http_buffer = buf
+            return False, None
+        except FileNotFoundError:
+            print("[CameraStream] ERREUR: FFmpeg introuvable. Installez-le (winget install ffmpeg) ou depuis https://ffmpeg.org")
+            self.consecutive_errors += 1
+            time.sleep(30)
+            return False, None
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[CameraStream] Erreur RTSP ({type(e).__name__}): {e}")
+            self._cleanup_ffmpeg()
+            self.http_buffer = b""
+            self.consecutive_errors += 1
+            backoff = min(10, 2 ** self.consecutive_errors)
+            time.sleep(backoff)
+            return False, None
+
+    def _cleanup_ffmpeg(self):
+        if self.ffmpeg_process:
+            try:
+                self.ffmpeg_process.kill()
+            except Exception:
+                pass
+            try:
+                self.ffmpeg_process.wait(2)
+            except Exception:
+                pass
+            self.ffmpeg_process = None
+            self.http_buffer = b""
+
     def read(self):
         """Retourne (success: bool, frame: np.ndarray | None) de maniere thread-safe."""
         with self.lock:
@@ -265,6 +357,7 @@ class CameraStream:
                 self.cap.release()
             except Exception:
                 pass
+        self._cleanup_ffmpeg()
 
 
 model = YOLO('yolov8n.pt')
@@ -538,9 +631,10 @@ def index():
 def live():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
-    site = request.args.get('site') or session.get('site')
-    if not site and config.UCB_SITES:
-        site = config.UCB_SITES[0]
+    if session.get('role') == 'admin':
+        site = request.args.get('site') or session.get('site') or (config.UCB_SITES[0] if config.UCB_SITES else None)
+    else:
+        site = session.get('site')
     policy = config.get_site_policy(site)
     return render_template('live_detection.html', site=site, policy=policy)
 
@@ -900,7 +994,7 @@ def video_feed():
         return redirect(url_for('auth.login'))
     # Le param GET prime sur la session pour les deux roles
     site = request.args.get('site') or session.get('site')
-    if not site and config.UCB_SITES:
+    if not site and session.get('role') == 'admin' and config.UCB_SITES:
         site = config.UCB_SITES[0]
     camera_type = request.args.get('camera_type', 'entry')
     gid = session.get('user_id') if session.get('role') == 'gardien' else None

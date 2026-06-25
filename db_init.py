@@ -3,7 +3,7 @@ from werkzeug.security import generate_password_hash
 
 from models import db, User, Site
 
-DEFAULT_SITE_NAME = "Msr Mulindwa"
+DEFAULT_SITE_NAME = "Mgr Mulindwa"
 
 
 def migrate_sqlite_schema(app) -> None:
@@ -61,6 +61,10 @@ def migrate_sqlite_schema(app) -> None:
     with app.app_context():
         with db.engine.connect() as conn:
             conn.execute(text("UPDATE user SET is_active = 1 WHERE is_active IS NULL"))
+            conn.execute(
+                text("UPDATE user SET site = :site WHERE role = 'gardien' AND (site IS NULL OR site = '')"),
+                {"site": DEFAULT_SITE_NAME},
+            )
             conn.commit()
 
 
