@@ -99,19 +99,22 @@ def inject_template_globals():
 init_app_database(app)
 init_presence_from_db(app)
 
+def _normalize_url(url: str) -> str:
+    u = url.strip()
+    if u and not u.startswith("http://") and not u.startswith("https://"):
+        if re.match(r"^\d+\.\d+\.\d+\.\d+", u) or re.match(r"^[a-zA-Z0-9.-]+\.(local|lan)$", u):
+            u = "http://" + u
+    if u.startswith("http://") or u.startswith("https://"):
+        parsed = urllib.parse.urlparse(u)
+        if not parsed.path or parsed.path in ("/", ""):
+            u = u.rstrip("/") + "/video"
+    return u
+
+
 class CameraStream:
     """Classe encapsulant la lecture asynchrone d'un flux video avec support du bouclage auto et IP Webcam HTTP."""
     def __init__(self, url: str):
-        u = url.strip()
-        # Normalisation auto : préfixe http:// si adresse IP détectée
-        if u and not u.startswith("http://") and not u.startswith("https://"):
-            if re.match(r"^\d+\.\d+\.\d+\.\d+", u) or re.match(r"^[a-zA-Z0-9.-]+\.(local|lan)$", u):
-                u = "http://" + u
-        # Ajout du chemin /video si juste IP:port
-        if u.startswith("http://") or u.startswith("https://"):
-            parsed = urllib.parse.urlparse(u)
-            if not parsed.path or parsed.path in ("/", ""):
-                u = u.rstrip("/") + "/video"
+        u = _normalize_url(url)
         self.url = u
         self.cap = None
         self.frame = None
@@ -155,7 +158,7 @@ class CameraStream:
                     continue
                 if len(self.http_buffer) > 5_000_000:
                     self.http_buffer = b""
-            raise StopIteration
+            return False, None  # self.running est devenu False
         except Exception as e:
             print(f"[CameraStream] Erreur HTTP ({type(e).__name__}): {e}")
             if self.http_stream:
@@ -359,7 +362,7 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
         try:
             s = Site.query.filter_by(name=site).first()
             if s:
-                url = s.camera_url_entry if camera_type == "entry" else s.camera_url_exit
+                url = (s.camera_url_entry if camera_type == "entry" else s.camera_url_exit) or ""
         except Exception:
             pass
             
@@ -367,17 +370,21 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
     if not url:
         cfg = config.SITE_CONFIG.get(site or "")
         if cfg:
-            url = cfg.get(f"camera_url_{camera_type}", "")
+            url = cfg.get(f"camera_url_{camera_type}", "") or ""
             
     if not url:
-        # Fallback universel
         url = "uploads/demo_video.mp4"
+
+    # Normaliser pour comparaison coherente avec CameraStream.url
+    url_norm = _normalize_url(url) if (url.startswith("http://") or url.startswith("https://")) else url
 
     with _caps_lock:
         stream = _caps.get(key)
-        if stream is None or stream.url != url or not stream.running:
+        if stream is None or stream.url != url_norm or not stream.running:
             if stream:
+                print(f"[_get_stream] Release ancien stream (url stream={stream.url}, url request={url_norm})")
                 stream.release()
+            print(f"[_get_stream] Nouveau CameraStream pour {key} -> {url}")
             stream = CameraStream(url)
             _caps[key] = stream
         return stream
@@ -753,23 +760,31 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
 
 
 def _fetch_http_snapshot(url: str):
-    """Requete HTTP directe vers une IP Webcam pour recuperer une frame JPEG (utilise /shot.jpg si possible)."""
-    try:
-        shot_url = re.sub(r'/(video|mjpeg|live)(\?.*)?$', '/shot.jpg', url)
-        if shot_url == url:
-            parsed = urllib.parse.urlparse(url)
-            base = f"{parsed.scheme}://{parsed.netloc}"
-            shot_url = base + "/shot.jpg"
-        print(f"[Snapshot HTTP] Tentative via {shot_url}")
-        req = urllib.request.Request(shot_url, headers={"User-Agent": "OpenCV"})
-        resp = urllib.request.urlopen(req, timeout=5)
-        data = resp.read()
-        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is not None:
-            return frame
-    except Exception as e:
-        print(f"[Snapshot HTTP] Erreur /shot.jpg: {e}")
+    """Requete HTTP directe vers une IP Webcam pour recuperer une frame JPEG.
+       Essaie /shot.jpg, /photo.jpg, /capture, puis la lecture partielle du MJPEG."""
+    # Liste des chemins possibles pour un snapshot
+    parsed = urllib.parse.urlparse(url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    paths_to_try = ["/shot.jpg", "/photo.jpg", "/capture", "/photo", "/snapshot.jpg"]
+    # Ajouter /shot.jpg en remplacant /video /mjpeg /live
+    current_path = re.sub(r'/(video|mjpeg|live)(\?.*)?$', '/shot.jpg', parsed.path)
+    if current_path != parsed.path:
+        paths_to_try.insert(0, base + current_path)
 
+    for shot_url in paths_to_try:
+        try:
+            req = urllib.request.Request(shot_url, headers={"User-Agent": "OpenCV"})
+            resp = urllib.request.urlopen(req, timeout=5)
+            data = resp.read()
+            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                print(f"[Snapshot HTTP] OK via {shot_url} ({len(data)} octets)")
+                return frame
+            print(f"[Snapshot HTTP] {shot_url} retourne {len(data)} octets mais non decode")
+        except Exception as e:
+            print(f"[Snapshot HTTP] {shot_url} -> {type(e).__name__}: {e}")
+
+    # Fallback : lecture partielle du MJPEG (premiers 200KB)
     try:
         print(f"[Snapshot HTTP] Fallback lecture partielle de {url}")
         req = urllib.request.Request(url, headers={"User-Agent": "OpenCV"})
@@ -780,8 +795,9 @@ def _fetch_http_snapshot(url: str):
         if a != -1 and b != -1 and b > a:
             frame = cv2.imdecode(np.frombuffer(data[a:b+2], dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
+                print(f"[Snapshot HTTP] Frame extraite du MJPEG ({len(data)} octets lus)")
                 return frame
-        print(f"[Snapshot HTTP] Aucune trame JPEG trouvee dans la reponse ({len(data)} octets)")
+        print(f"[Snapshot HTTP] Aucun JPEG dans le MJPEG ({len(data)} octets)")
     except Exception as e:
         print(f"[Snapshot HTTP] Erreur fallback: {e}")
     return None
@@ -799,16 +815,17 @@ def camera_snapshot():
         try:
             s = Site.query.filter_by(name=site).first()
             if s:
-                url = s.camera_url_entry if camera_type == "entry" else s.camera_url_exit
+                url = (s.camera_url_entry if camera_type == "entry" else s.camera_url_exit) or ""
         except Exception:
             pass
     if not url:
         cfg = config.SITE_CONFIG.get(site or "")
         if cfg:
-            url = cfg.get(f"camera_url_{camera_type}", "")
+            url = cfg.get(f"camera_url_{camera_type}", "") or ""
 
-    # Pour les URLs HTTP, on fait une requete directe (plus fiable que le thread)
+    print(f"[DEBUG] camera_snapshot site={site} type={camera_type} url='{url}'")
     if url and (url.startswith("http://") or url.startswith("https://")):
+        print(f"[DEBUG] camera_snapshot -> _fetch_http_snapshot({url})")
         frame = _fetch_http_snapshot(url)
         if frame is not None:
             display_frame = frame.copy()
