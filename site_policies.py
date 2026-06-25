@@ -70,6 +70,7 @@ def create_site():
     access_end = request.form.get("access_end", "22:00").strip()
     camera_entry = request.form.get("camera_url_entry", "").strip()
     camera_exit = request.form.get("camera_url_exit", "").strip()
+    gate_ip = request.form.get("gate_ip", "").strip()
 
     if not name or not code:
         flash("Le nom et le code du site sont obligatoires.", "danger")
@@ -89,7 +90,8 @@ def create_site():
         max_hours_visitor=max_visitor,
         access_start=access_start,
         access_end=access_end,
-        long_stay_hours=long_stay
+        long_stay_hours=long_stay,
+        gate_ip=gate_ip or None
     )
     db.session.add(new_site)
     db.session.commit()
@@ -119,6 +121,7 @@ def update_site(site_id):
     s.access_end = request.form.get("access_end", s.access_end).strip()
     s.camera_url_entry = request.form.get("camera_url_entry", s.camera_url_entry).strip()
     s.camera_url_exit = request.form.get("camera_url_exit", s.camera_url_exit).strip()
+    s.gate_ip = request.form.get("gate_ip", s.gate_ip or "").strip() or None
 
     db.session.commit()
     flash(f"Site {s.name} mis a jour avec succes.", "success")

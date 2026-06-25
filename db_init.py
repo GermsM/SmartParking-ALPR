@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
 
-from models import db, User, Site
+from models import db, User
 
 
 def migrate_sqlite_schema(app) -> None:
@@ -47,6 +47,9 @@ def migrate_sqlite_schema(app) -> None:
 
     add_col("vehicle", "vehicle_type", "VARCHAR(30)")
 
+    # Adresse IP du portail physique pour chaque site
+    add_col("site", "gate_ip", "VARCHAR(255)")
+
     # Nouvelles colonnes de site_id pour la modularite
     add_col("user", "site_id", "INTEGER")
     add_col("vehicle", "site_id", "INTEGER")
@@ -59,42 +62,9 @@ def migrate_sqlite_schema(app) -> None:
             conn.commit()
 
 
-def seed_default_sites_if_empty() -> None:
-    import config
-    # Ne pas réensemencer si l'utilisateur a déjà supprimé les sites
-    if config.yaml_config.get("initial_setup_done", False):
-        return
-    if Site.query.count() > 0:
-        config.yaml_config["initial_setup_done"] = True
-        config.save_yaml_config()
-        return
-    for s_data in config.yaml_config.get("default_sites", []):
-        s = Site(
-            name=s_data["name"],
-            code=s_data["code"],
-            capacity=s_data["capacity"],
-            camera_url_entry=s_data["camera_url_entry"],
-            camera_url_exit=s_data["camera_url_exit"],
-            max_hours_student=s_data["max_hours_student"],
-            max_hours_visitor=s_data["max_hours_visitor"],
-            access_start=s_data["access_start"],
-            access_end=s_data["access_end"],
-            long_stay_hours=s_data["long_stay_hours"]
-        )
-        db.session.add(s)
-    db.session.commit()
-    config.yaml_config["initial_setup_done"] = True
-    config.save_yaml_config()
-    print("Sites par defaut crees dans la base de donnees")
-
-
 def seed_default_users_if_empty() -> None:
     if User.query.count() > 0:
         return
-    
-    # Recherche du site de Bugabo pour y associer le gardien
-    bugabo = Site.query.filter_by(name="Site de Bugabo").first()
-    bugabo_id = bugabo.id if bugabo else None
 
     db.session.add(
         User(
@@ -113,8 +83,8 @@ def seed_default_users_if_empty() -> None:
             password=generate_password_hash("gardien123"),
             role="gardien",
             full_name="Gardien site",
-            site="Site de Bugabo",
-            site_id=bugabo_id,
+            site=None,
+            site_id=None,
             is_active=True,
         )
     )
@@ -126,5 +96,4 @@ def init_app_database(app) -> None:
     with app.app_context():
         db.create_all()
         migrate_sqlite_schema(app)
-        seed_default_sites_if_empty()
         seed_default_users_if_empty()

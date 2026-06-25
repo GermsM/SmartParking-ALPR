@@ -22,7 +22,6 @@ yaml_config = {
     },
     "forbidden_yolo_classes": ["truck", "bus"],
     "forbidden_vehicle_types": ["camping_car", "poids_lourd", "bus"],
-    "default_sites": []
 }
 
 # Chargement du fichier YAML s'il existe
@@ -80,8 +79,7 @@ def get_ucb_sites():
                 return [s.name for s in Site.query.order_by(Site.name).all()]
     except Exception:
         pass
-    # Liste par défaut tirée du YAML
-    return [s["name"] for s in yaml_config.get("default_sites", [])]
+    return []
 
 
 def get_site_config():
@@ -105,9 +103,7 @@ def get_site_config():
                 return config_dict
     except Exception:
         pass
-    for s in yaml_config.get("default_sites", []):
-        config_dict[s["name"]] = s
-    return config_dict
+    return {}
 
 
 def __getattr__(name):
@@ -119,7 +115,6 @@ def __getattr__(name):
 
 
 def get_site_capacity(site_name: str | None) -> int:
-    """Retourne la capacite d'un site à partir de la base de donnees ou de la config."""
     if site_name:
         try:
             if current_app:
@@ -129,44 +124,32 @@ def get_site_capacity(site_name: str | None) -> int:
                     return s.capacity
         except Exception:
             pass
-        # Fallback YAML
-        for s in yaml_config.get("default_sites", []):
-            if s["name"] == site_name:
-                return s.get("capacity", PARKING_CAPACITY)
     return PARKING_CAPACITY
 
 
 def get_site_camera_url_entry(site_name: str | None) -> str:
-    """Retourne l'URL de la camera d'entree d'un site."""
     if site_name:
         try:
             if current_app:
                 from models import Site
                 s = Site.query.filter_by(name=site_name).first()
                 if s:
-                    return s.camera_url_entry
+                    return s.camera_url_entry or ""
         except Exception:
             pass
-        for s in yaml_config.get("default_sites", []):
-            if s["name"] == site_name:
-                return s.get("camera_url_entry", "")
     return ""
 
 
 def get_site_camera_url_exit(site_name: str | None) -> str:
-    """Retourne l'URL de la camera de sortie d'un site."""
     if site_name:
         try:
             if current_app:
                 from models import Site
                 s = Site.query.filter_by(name=site_name).first()
                 if s:
-                    return s.camera_url_exit
+                    return s.camera_url_exit or ""
         except Exception:
             pass
-        for s in yaml_config.get("default_sites", []):
-            if s["name"] == site_name:
-                return s.get("camera_url_exit", "")
     return ""
 
 
@@ -176,7 +159,6 @@ def get_site_camera_url(site_name: str | None) -> str:
 
 
 def get_site_policy(site_name: str | None) -> dict:
-    """Retourne les politiques d'un site à partir de la base de donnees ou du YAML."""
     if site_name:
         try:
             if current_app:
@@ -196,9 +178,6 @@ def get_site_policy(site_name: str | None) -> dict:
                     }
         except Exception:
             pass
-        for s in yaml_config.get("default_sites", []):
-            if s["name"] == site_name:
-                return s
     return {
         "capacity": PARKING_CAPACITY,
         "max_hours_student": 8,

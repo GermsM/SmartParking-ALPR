@@ -74,8 +74,8 @@ def inject_template_globals():
             for s in Site.query.all()
         }
     except Exception:
-        sites_list = [s["name"] for s in config.yaml_config.get("default_sites", [])]
-        site_config_dict = {s["name"]: s for s in config.yaml_config.get("default_sites", [])}
+        sites_list = []
+        site_config_dict = {}
 
     ctx = {
         "ucb_sites": tuple(sites_list),
@@ -121,6 +121,8 @@ class CameraStream:
         self.http_stream = None
         self.http_buffer = b""
         self.lock = threading.Lock()
+        self.consecutive_errors = 0
+        print(f"[CameraStream] Initialisation avec URL: {self.url}")
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
 
@@ -128,10 +130,15 @@ class CameraStream:
         """Lit une frame depuis un flux MJPEG HTTP (IP Webcam)."""
         try:
             if self.http_stream is None:
+                print(f"[CameraStream] Connexion a {self.url}...")
                 req = urllib.request.Request(self.url, headers={"User-Agent": "OpenCV"})
-                self.http_stream = urllib.request.urlopen(req, timeout=10)
+                self.http_stream = urllib.request.urlopen(req, timeout=15)
+                print(f"[CameraStream] Connecte a {self.url}")
                 self.http_buffer = b""
+            deadline = time.time() + 8
             while self.running:
+                if time.time() > deadline:
+                    raise TimeoutError("Aucune trame JPEG recue dans le delai")
                 chunk = self.http_stream.read(4096)
                 if not chunk:
                     raise ConnectionError("Fin du flux HTTP")
@@ -143,18 +150,20 @@ class CameraStream:
                     self.http_buffer = self.http_buffer[b+2:]
                     frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is not None:
+                        self.consecutive_errors = 0
                         return True, frame
-                    else:
-                        continue
+                    continue
                 if len(self.http_buffer) > 5_000_000:
                     self.http_buffer = b""
             raise StopIteration
-        except Exception:
+        except Exception as e:
+            print(f"[CameraStream] Erreur HTTP ({type(e).__name__}): {e}")
             if self.http_stream:
                 try: self.http_stream.close()
                 except: pass
             self.http_stream = None
             self.http_buffer = b""
+            self.consecutive_errors += 1
             return False, None
 
     def _update(self):
@@ -295,8 +304,17 @@ def trigger_gate_simulation(site_name: str | None, direction: str, action: str, 
     try:
         s_obj = Site.query.filter_by(name=site_name).first() if site_name else None
         if s_obj:
-            # Simulation d'adresses IP pour le memoire
-            ip_addr = f"192.168.1.{100 + s_obj.id}"
+            if s_obj.gate_ip:
+                # Format supporte: "192.168.1.200" ou "192.168.1.200:8080"
+                parts = s_obj.gate_ip.split(":")
+                ip_addr = parts[0].strip()
+                if len(parts) > 1:
+                    try:
+                        port_num = int(parts[1].strip())
+                    except ValueError:
+                        pass
+            else:
+                ip_addr = f"192.168.1.{100 + s_obj.id}"
     except Exception:
         pass
 
@@ -734,33 +752,85 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 
+def _fetch_http_snapshot(url: str):
+    """Requete HTTP directe vers une IP Webcam pour recuperer une frame JPEG (utilise /shot.jpg si possible)."""
+    try:
+        shot_url = re.sub(r'/(video|mjpeg|live)(\?.*)?$', '/shot.jpg', url)
+        if shot_url == url:
+            parsed = urllib.parse.urlparse(url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            shot_url = base + "/shot.jpg"
+        print(f"[Snapshot HTTP] Tentative via {shot_url}")
+        req = urllib.request.Request(shot_url, headers={"User-Agent": "OpenCV"})
+        resp = urllib.request.urlopen(req, timeout=5)
+        data = resp.read()
+        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if frame is not None:
+            return frame
+    except Exception as e:
+        print(f"[Snapshot HTTP] Erreur /shot.jpg: {e}")
+
+    try:
+        print(f"[Snapshot HTTP] Fallback lecture partielle de {url}")
+        req = urllib.request.Request(url, headers={"User-Agent": "OpenCV"})
+        resp = urllib.request.urlopen(req, timeout=4)
+        data = resp.read(200000)
+        a = data.find(b"\xff\xd8")
+        b = data.find(b"\xff\xd9")
+        if a != -1 and b != -1 and b > a:
+            frame = cv2.imdecode(np.frombuffer(data[a:b+2], dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                return frame
+        print(f"[Snapshot HTTP] Aucune trame JPEG trouvee dans la reponse ({len(data)} octets)")
+    except Exception as e:
+        print(f"[Snapshot HTTP] Erreur fallback: {e}")
+    return None
+
+
 @app.route('/camera_snapshot')
 def camera_snapshot():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
     site = request.args.get('site')
     camera_type = request.args.get('camera_type', 'entry')
+
+    url = ""
+    if site:
+        try:
+            s = Site.query.filter_by(name=site).first()
+            if s:
+                url = s.camera_url_entry if camera_type == "entry" else s.camera_url_exit
+        except Exception:
+            pass
+    if not url:
+        cfg = config.SITE_CONFIG.get(site or "")
+        if cfg:
+            url = cfg.get(f"camera_url_{camera_type}", "")
+
+    # Pour les URLs HTTP, on fait une requete directe (plus fiable que le thread)
+    if url and (url.startswith("http://") or url.startswith("https://")):
+        frame = _fetch_http_snapshot(url)
+        if frame is not None:
+            display_frame = frame.copy()
+            label_flux = f"{site or ''} - {camera_type.upper()}"
+            cv2.putText(display_frame, label_flux[:35], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            display_frame = cv2.resize(display_frame, (850, 650))
+            ret, buffer = cv2.imencode('.jpg', display_frame)
+            return Response(buffer.tobytes(), mimetype='image/jpeg')
+
     try:
         stream = _get_stream(site, camera_type)
         success, frame = stream.read()
         if success and frame is not None:
             display_frame = frame.copy()
             label_flux = f"{site or ''} - {camera_type.upper()}"
-            cv2.putText(
-                display_frame,
-                label_flux[:35],
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (255, 255, 255),
-                2,
-            )
+            cv2.putText(display_frame, label_flux[:35], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             display_frame = cv2.resize(display_frame, (850, 650))
             ret, buffer = cv2.imencode('.jpg', display_frame)
             return Response(buffer.tobytes(), mimetype='image/jpeg')
     except Exception:
         pass
-    
+
     placeholder = _get_placeholder_frame(f"PAS DE SIGNAL - {camera_type.upper()} {site or ''}")
     return Response(placeholder, mimetype='image/jpeg')
 

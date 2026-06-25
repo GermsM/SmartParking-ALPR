@@ -16,6 +16,7 @@ class Site(db.Model):
     access_start = db.Column(db.String(10), default="06:00")
     access_end = db.Column(db.String(10), default="22:00")
     long_stay_hours = db.Column(db.Integer, default=48)
+    gate_ip = db.Column(db.String(255))
 
 
 class User(db.Model):

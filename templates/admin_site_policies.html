@@ -51,6 +51,11 @@
                     <code class="text-truncate d-block bg-dark bg-opacity-25 p-2 rounded text-info small" style="border: 1px solid var(--ps-border);">{{ s.camera_url_entry or '— Aucun flux' }}</code>
                 </div>
 
+                <div class="mb-3">
+                    <div class="small text-secondary mb-1">Portail physique (IP)</div>
+                    <code class="text-truncate d-block bg-dark bg-opacity-25 p-2 rounded text-warning small" style="border: 1px solid var(--ps-border);">{{ s.gate_ip or '— Simulation auto' }}</code>
+                </div>
+
                 <div class="mb-4">
                     <div class="small text-secondary mb-1">Camera Sortie (Simulation)</div>
                     <code class="text-truncate d-block bg-dark bg-opacity-25 p-2 rounded text-info small" style="border: 1px solid var(--ps-border);">{{ s.camera_url_exit or '— Aucun flux' }}</code>
@@ -110,6 +115,10 @@
                             <div class="col-12">
                                 <label class="form-label small">Seuil d'alerte vehicule dormeur (heures)</label>
                                 <input type="number" class="form-control" name="long_stay_hours" value="{{ s.long_stay_hours }}" required min="1" max="168">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">Adresse IP du portail physique (relais / automate)</label>
+                                <input type="text" class="form-control" name="gate_ip" value="{{ s.gate_ip or '' }}" placeholder="ex. 192.168.1.200 ou 192.168.1.200:8080">
                             </div>
                             <div class="col-12">
                                 <label class="form-label small">URL Camera Entree (IP Webcam ou chemin de video locale)</label>
@@ -178,13 +187,17 @@
                             <input type="number" class="form-control" name="long_stay_hours" value="48" required min="1" max="168">
                         </div>
                         <div class="col-12">
-                            <label class="form-label small">URL Camera Entree (IP Webcam ou chemin de video locale)</label>
-                            <input type="text" class="form-control" name="camera_url_entry" placeholder="ex. uploads/video_entree.mp4">
-                        </div>
-                        <div class="col-12">
-                            <label class="form-label small">URL Camera Sortie (IP Webcam ou chemin de video locale)</label>
-                            <input type="text" class="form-control" name="camera_url_exit" placeholder="ex. uploads/video_sortie.mp4">
-                        </div>
+                                <label class="form-label small">Adresse IP du portail physique (relais / automate)</label>
+                                <input type="text" class="form-control" name="gate_ip" placeholder="ex. 192.168.1.200 ou 192.168.1.200:8080">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">URL Camera Entree (IP Webcam ou chemin de video locale)</label>
+                                <input type="text" class="form-control" name="camera_url_entry" placeholder="ex. uploads/video_entree.mp4">
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label small">URL Camera Sortie (IP Webcam ou chemin de video locale)</label>
+                                <input type="text" class="form-control" name="camera_url_exit" placeholder="ex. uploads/video_sortie.mp4">
+                            </div>
                     </div>
                 </div>
                 <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">

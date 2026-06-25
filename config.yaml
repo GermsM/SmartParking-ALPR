@@ -1,66 +1,18 @@
-tesseract_cmd: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-custom_config: "--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-database_url: "sqlite:///parking.db"
-admin_recovery_code: "UCB-RECOVERY-2026"
-secret_key: "ucb_parking_secret_key_2026"
-
-smtp:
-  host: "smtp.gmail.com"
-  port: 587
-  user: "system.parking.ucbukavu@gmail.com"
-  password: "ksrouzqyhllsytjl"
-  from_address: "system.parking.ucbukavu@gmail.com"
-
-forbidden_yolo_classes:
-  - "truck"
-  - "bus"
-
+admin_recovery_code: UCB-RECOVERY-2026
+custom_config: --oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789
+database_url: sqlite:///parking.db
 forbidden_vehicle_types:
-  - "camping_car"
-  - "poids_lourd"
-  - "bus"
-
-default_sites:
-  - name: "Site de Bugabo"
-    code: "BUG"
-    capacity: 15
-    camera_url_entry: "uploads/bugabo_entry.mp4"
-    camera_url_exit: "uploads/bugabo_exit.mp4"
-    max_hours_student: 8
-    max_hours_visitor: 4
-    access_start: "06:00"
-    access_end: "22:00"
-    long_stay_hours: 48
-
-  - name: "Site de Kalambo"
-    code: "KAL"
-    capacity: 100
-    camera_url_entry: "uploads/kalambo_entry.mp4"
-    camera_url_exit: "uploads/kalambo_exit.mp4"
-    max_hours_student: 12
-    max_hours_visitor: 6
-    access_start: "05:30"
-    access_end: "23:00"
-    long_stay_hours: 48
-
-  - name: "Site de Karhale"
-    code: "KAR"
-    capacity: 30
-    camera_url_entry: "uploads/karhale_entry.mp4"
-    camera_url_exit: "uploads/karhale_exit.mp4"
-    max_hours_student: 10
-    max_hours_visitor: 4
-    access_start: "06:00"
-    access_end: "22:00"
-    long_stay_hours: 48
-
-  - name: "Site Mgr Mulindwa"
-    code: "MUL"
-    capacity: 20
-    camera_url_entry: "uploads/mulindwa_entry.mp4"
-    camera_url_exit: "uploads/mulindwa_exit.mp4"
-    max_hours_student: 8
-    max_hours_visitor: 4
-    access_start: "06:00"
-    access_end: "22:00"
-    long_stay_hours: 48
+- camping_car
+- poids_lourd
+- bus
+forbidden_yolo_classes:
+- truck
+- bus
+secret_key: ucb_parking_secret_key_2026
+smtp:
+  from_address: system.parking.ucbukavu@gmail.com
+  host: smtp.gmail.com
+  password: ksrouzqyhllsytjl
+  port: 587
+  user: system.parking.ucbukavu@gmail.com
+tesseract_cmd: C:\Program Files\Tesseract-OCR\tesseract.exe
