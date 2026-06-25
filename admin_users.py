@@ -5,7 +5,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from werkzeug.security import generate_password_hash
 
 from auth import login_required
-from models import AccessLog, Notification, User, db
+from models import AccessLog, Notification, User, Site, db
 
 admin_bp = Blueprint("admin_staff", __name__)
 
@@ -44,12 +44,16 @@ def create_gardien():
         flash("Ce nom d'utilisateur existe déjà.", "warning")
         return redirect(url_for("admin_staff.list_gardiens"))
 
+    site_obj = Site.query.filter_by(name=site).first()
+    site_id = site_obj.id if site_obj else None
+
     u = User(
         username=username,
         password=generate_password_hash(password),
         role="gardien",
         full_name=full_name,
         site=site,
+        site_id=site_id,
         is_active=True,
         must_change_password=True,
     )
@@ -108,7 +112,13 @@ def update_gardien(user_id):
         flash("Seuls les comptes gardiens peuvent etre modifies ici.", "danger")
         return redirect(url_for("admin_staff.list_gardiens"))
     u.full_name = request.form.get("full_name", "").strip() or None
-    u.site = request.form.get("site", "").strip() or None
+    site_name = request.form.get("site", "").strip() or None
+    u.site = site_name
+    if site_name:
+        site_obj = Site.query.filter_by(name=site_name).first()
+        u.site_id = site_obj.id if site_obj else None
+    else:
+        u.site_id = None
     db.session.commit()
     flash(f"Compte « {u.username} » mis a jour.", "success")
     return redirect(url_for("admin_staff.list_gardiens"))

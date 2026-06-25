@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
 
-from models import db, User, Site
+from models import db, User, Site, Vehicle, AccessLog, Notification
 
 DEFAULT_SITE_NAME = "Mgr Mulindwa"
 
@@ -66,6 +66,38 @@ def migrate_sqlite_schema(app) -> None:
                 {"site": DEFAULT_SITE_NAME},
             )
             conn.commit()
+
+        # Resoudre et propager automatiquement site_id pour la modularite des donnees existantes
+        try:
+            # Utilisateurs (gardiens)
+            for u in User.query.filter(User.role == "gardien", User.site_id.is_(None), User.site.isnot(None)).all():
+                s_obj = Site.query.filter_by(name=u.site).first()
+                if s_obj:
+                    u.site_id = s_obj.id
+            
+            # Vehicules
+            for v in Vehicle.query.filter(Vehicle.site_id.is_(None), Vehicle.site_authorized.isnot(None)).all():
+                s_obj = Site.query.filter_by(name=v.site_authorized).first()
+                if s_obj:
+                    v.site_id = s_obj.id
+            
+            # AccessLog
+            for log in AccessLog.query.filter(AccessLog.site_id.is_(None), AccessLog.site.isnot(None)).all():
+                s_obj = Site.query.filter_by(name=log.site).first()
+                if s_obj:
+                    log.site_id = s_obj.id
+            
+            # Notification
+            for n in Notification.query.filter(Notification.site_id.is_(None), Notification.site.isnot(None)).all():
+                s_obj = Site.query.filter_by(name=n.site).first()
+                if s_obj:
+                    n.site_id = s_obj.id
+            
+            db.session.commit()
+            print("[MIGRATION] Migration des correspondances site_id terminee.")
+        except Exception as e:
+            db.session.rollback()
+            print(f"[MIGRATION] Erreur lors de la resolution de site_id : {e}")
 
 
 def seed_default_site_if_empty() -> None:
