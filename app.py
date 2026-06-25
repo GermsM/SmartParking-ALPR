@@ -7,6 +7,7 @@ import numpy as np
 import time
 import re
 import threading
+import urllib.request
 from datetime import datetime
 
 from access_logging import (
@@ -98,19 +99,70 @@ init_app_database(app)
 init_presence_from_db(app)
 
 class CameraStream:
-    """Classe encapsulant la lecture asynchrone d'un flux video avec support du bouclage automatique."""
+    """Classe encapsulant la lecture asynchrone d'un flux video avec support du bouclage auto et IP Webcam HTTP."""
     def __init__(self, url: str):
         self.url = url
         self.cap = None
         self.frame = None
         self.success = False
         self.running = True
+        self.is_http = url.startswith("http://") or url.startswith("https://")
+        self.http_stream = None
+        self.http_buffer = b""
         self.lock = threading.Lock()
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
 
+    def _read_http_frame(self):
+        """Lit une frame depuis un flux MJPEG HTTP (IP Webcam)."""
+        try:
+            if self.http_stream is None:
+                req = urllib.request.Request(self.url, headers={"User-Agent": "OpenCV"})
+                self.http_stream = urllib.request.urlopen(req, timeout=10)
+                self.http_buffer = b""
+            while self.running:
+                chunk = self.http_stream.read(4096)
+                if not chunk:
+                    raise ConnectionError("Fin du flux HTTP")
+                self.http_buffer += chunk
+                a = self.http_buffer.find(b"\xff\xd8")
+                b = self.http_buffer.find(b"\xff\xd9")
+                if a != -1 and b != -1 and b > a:
+                    jpg = self.http_buffer[a:b+2]
+                    self.http_buffer = self.http_buffer[b+2:]
+                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        return True, frame
+                    else:
+                        continue
+                if len(self.http_buffer) > 5_000_000:
+                    self.http_buffer = b""
+            raise StopIteration
+        except Exception:
+            if self.http_stream:
+                try: self.http_stream.close()
+                except: pass
+            self.http_stream = None
+            self.http_buffer = b""
+            return False, None
+
     def _update(self):
         while self.running:
+            if self.is_http:
+                success, frame = self._read_http_frame()
+                with self.lock:
+                    if success:
+                        h, w = frame.shape[:2]
+                        if w > 640:
+                            scale = 640 / w
+                            frame = cv2.resize(frame, (640, int(h * scale)))
+                        self.frame = frame
+                        self.success = True
+                    else:
+                        self.success = False
+                        time.sleep(3.0)
+                continue
+
             if self.cap is None or not self.cap.isOpened():
                 cap = cv2.VideoCapture(self.url)
                 if cap.isOpened():
@@ -125,7 +177,6 @@ class CameraStream:
 
             success, frame = self.cap.read()
             
-            # Bouclage automatique pour les fichiers videos locaux
             if not success:
                 try:
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -152,6 +203,10 @@ class CameraStream:
 
     def release(self):
         self.running = False
+        if self.http_stream:
+            try: self.http_stream.close()
+            except: pass
+            self.http_stream = None
         if self.cap:
             try:
                 self.cap.release()

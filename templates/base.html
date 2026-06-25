@@ -499,6 +499,10 @@
 
     // Système de Toast dynamique et personnalisé
     function showToast(message, category = 'info', duration = 4000) {
+        // Les mots de passe générés restent jusqu'à fermeture manuelle
+        if (message.indexOf('Mot de passe temporaire') !== -1 || message.indexOf('mot de passe') !== -1) {
+            duration = 0;
+        }
         var container = document.getElementById('toast-container');
         if (!container) {
             container = document.createElement('div');
@@ -530,9 +534,12 @@
             toast.classList.add('show');
         }, 10);
         
-        var dismissTimeout = setTimeout(function() {
-            dismiss();
-        }, duration);
+        var dismissTimeout = null;
+        if (duration > 0) {
+            dismissTimeout = setTimeout(function() {
+                dismiss();
+            }, duration);
+        }
         
         function dismiss() {
             toast.classList.remove('show');
@@ -543,7 +550,7 @@
         }
         
         toast.querySelector('.ps-toast-close').addEventListener('click', function() {
-            clearTimeout(dismissTimeout);
+            if (dismissTimeout) clearTimeout(dismissTimeout);
             dismiss();
         });
     }

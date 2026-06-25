@@ -60,9 +60,14 @@ def migrate_sqlite_schema(app) -> None:
 
 
 def seed_default_sites_if_empty() -> None:
-    if Site.query.count() > 0:
-        return
     import config
+    # Ne pas réensemencer si l'utilisateur a déjà supprimé les sites
+    if config.yaml_config.get("initial_setup_done", False):
+        return
+    if Site.query.count() > 0:
+        config.yaml_config["initial_setup_done"] = True
+        config.save_yaml_config()
+        return
     for s_data in config.yaml_config.get("default_sites", []):
         s = Site(
             name=s_data["name"],
@@ -78,6 +83,8 @@ def seed_default_sites_if_empty() -> None:
         )
         db.session.add(s)
     db.session.commit()
+    config.yaml_config["initial_setup_done"] = True
+    config.save_yaml_config()
     print("Sites par defaut crees dans la base de donnees")
 
 
