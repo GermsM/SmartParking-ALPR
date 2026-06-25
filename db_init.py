@@ -1,7 +1,9 @@
 from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash
 
-from models import db, User
+from models import db, User, Site
+
+DEFAULT_SITE_NAME = "Msr Mulindwa"
 
 
 def migrate_sqlite_schema(app) -> None:
@@ -62,9 +64,29 @@ def migrate_sqlite_schema(app) -> None:
             conn.commit()
 
 
+def seed_default_site_if_empty() -> None:
+    if Site.query.count() > 0:
+        return
+    default = Site(
+        name=DEFAULT_SITE_NAME,
+        code=DEFAULT_SITE_NAME[:4].upper(),
+        capacity=50,
+        max_hours_student=8,
+        max_hours_visitor=4,
+        access_start="06:00",
+        access_end="22:00",
+        long_stay_hours=48,
+    )
+    db.session.add(default)
+    db.session.commit()
+    print(f"Site par defaut cree : {DEFAULT_SITE_NAME}")
+
+
 def seed_default_users_if_empty() -> None:
     if User.query.count() > 0:
         return
+
+    default_site = Site.query.filter_by(name=DEFAULT_SITE_NAME).first()
 
     db.session.add(
         User(
@@ -83,8 +105,8 @@ def seed_default_users_if_empty() -> None:
             password=generate_password_hash("gardien123"),
             role="gardien",
             full_name="Gardien site",
-            site=None,
-            site_id=None,
+            site=DEFAULT_SITE_NAME,
+            site_id=default_site.id if default_site else None,
             is_active=True,
         )
     )
@@ -96,4 +118,5 @@ def init_app_database(app) -> None:
     with app.app_context():
         db.create_all()
         migrate_sqlite_schema(app)
+        seed_default_site_if_empty()
         seed_default_users_if_empty()

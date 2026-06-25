@@ -76,16 +76,38 @@
                                     {% endif %}
                                 </td>
                                 <td>
-                                    <form method="post" action="{{ url_for('admin_staff.toggle_gardien_active', user_id=g.id) }}" class="d-inline">
-                                        <button type="submit" class="btn btn-sm btn-outline-warning">
-                                            {% if g.is_active %}Désactiver{% else %}Réactiver{% endif %}
+                                    <div class="dropdown">
+                                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                                            <i class="bi bi-gear me-1"></i>Actions
                                         </button>
-                                    </form>
-                                    <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#pwd-{{ g.id }}">Mot de passe</button>
-                                    <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="modal" data-bs-target="#editGardienModal-{{ g.id }}">Modifier</button>
-                                    <button type="button" class="btn btn-sm btn-outline-danger btn-delete-gardien" data-gardien-username="{{ g.username }}" data-delete-url="{{ url_for('admin_staff.delete_gardien', user_id=g.id) }}">
-                                        Supprimer
-                                    </button>
+                                        <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                                            <li>
+                                                <button class="dropdown-item" type="button" data-bs-toggle="modal" data-bs-target="#editGardienModal-{{ g.id }}">
+                                                    <i class="bi bi-pencil-square me-2 text-primary"></i>Modifier
+                                                </button>
+                                            </li>
+                                            <li>
+                                                <button class="dropdown-item" type="button" data-bs-toggle="collapse" data-bs-target="#pwd-{{ g.id }}">
+                                                    <i class="bi bi-key me-2 text-warning"></i>Mot de passe
+                                                </button>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <form method="post" action="{{ url_for('admin_staff.toggle_gardien_active', user_id=g.id) }}" class="d-inline">
+                                                    <button type="submit" class="dropdown-item">
+                                                        <i class="bi bi-{% if g.is_active %}toggle-off text-danger{% else %}toggle-on text-success{% endif %} me-2"></i>
+                                                        {% if g.is_active %}Désactiver{% else %}Réactiver{% endif %}
+                                                    </button>
+                                                </form>
+                                            </li>
+                                            <li><hr class="dropdown-divider"></li>
+                                            <li>
+                                                <button class="dropdown-item text-danger btn-delete-gardien" type="button" data-gardien-username="{{ g.username }}" data-delete-url="{{ url_for('admin_staff.delete_gardien', user_id=g.id) }}">
+                                                    <i class="bi bi-trash me-2"></i>Supprimer
+                                                </button>
+                                            </li>
+                                        </ul>
+                                    </div>
                                 </td>
                             </tr>
                             <tr class="collapse table-darkish" id="pwd-{{ g.id }}">

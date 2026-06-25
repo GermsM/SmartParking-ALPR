@@ -538,9 +538,9 @@ def index():
 def live():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
-    site = session.get('site')
-    if session.get('role') == 'admin':
-        site = request.args.get('site') or (config.UCB_SITES[0] if config.UCB_SITES else None)
+    site = request.args.get('site') or session.get('site')
+    if not site and config.UCB_SITES:
+        site = config.UCB_SITES[0]
     policy = config.get_site_policy(site)
     return render_template('live_detection.html', site=site, policy=policy)
 
@@ -900,7 +900,7 @@ def video_feed():
         return redirect(url_for('auth.login'))
     # Le param GET prime sur la session pour les deux roles
     site = request.args.get('site') or session.get('site')
-    if not site and session.get('role') == 'admin' and config.UCB_SITES:
+    if not site and config.UCB_SITES:
         site = config.UCB_SITES[0]
     camera_type = request.args.get('camera_type', 'entry')
     gid = session.get('user_id') if session.get('role') == 'gardien' else None
