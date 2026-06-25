@@ -100,6 +100,11 @@ init_app_database(app)
 init_presence_from_db(app)
 
 def _normalize_url(url: str) -> str:
+    """Normalise une URL video :
+       - Ajoute http:// si une adresse IP ou un hostname est detecte sans protocole
+       - Ajoute le chemin /video si l'URL contient juste un IP:port nu
+       - Enleve les espaces superflus
+    """
     u = url.strip()
     if u and not u.startswith("http://") and not u.startswith("https://"):
         if re.match(r"^\d+\.\d+\.\d+\.\d+", u) or re.match(r"^[a-zA-Z0-9.-]+\.(local|lan)$", u):
@@ -111,18 +116,36 @@ def _normalize_url(url: str) -> str:
     return u
 
 
+def _rotate_to_portrait(frame):
+    """Tourne la frame en mode portrait si elle est en paysage (largeur > hauteur).
+       Les IP Webcam envoient souvent du 640x480 meme en tenant le telephone verticalement.
+    """
+    if frame is None:
+        return frame
+    h, w = frame.shape[:2]
+    if w > h:
+        frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+    return frame
+
+
 class CameraStream:
-    """Classe encapsulant la lecture asynchrone d'un flux video avec support du bouclage auto et IP Webcam HTTP."""
+    """Lecteur asynchrone de flux video avec thread dedie.
+
+    - Flux locaux (fichiers .mp4) : utilise OpenCV VideoCapture avec bouclage
+    - Flux HTTP (IP Webcam MJPEG) : parse le MJPEG via urllib en cherchant les marqueurs JPEG
+    - La frame la plus recente est stockee dans self.frame et lue par self.read()
+    - Le thread d'arriere-plan tente de se reconnecter automatiquement en cas d'erreur
+    """
     def __init__(self, url: str):
         u = _normalize_url(url)
         self.url = u
-        self.cap = None
-        self.frame = None
-        self.success = False
-        self.running = True
+        self.cap = None          # Capture OpenCV pour les fichiers locaux
+        self.frame = None        # Derniere frame decodee
+        self.success = False     # True si une frame valide est disponible
+        self.running = True      # Le thread doit continuer
         self.is_http = self.url.startswith("http://") or self.url.startswith("https://")
-        self.http_stream = None
-        self.http_buffer = b""
+        self.http_stream = None  # Connexion HTTP pour MJPEG
+        self.http_buffer = b""   # Buffer d'accumulation MJPEG
         self.lock = threading.Lock()
         self.consecutive_errors = 0
         print(f"[CameraStream] Initialisation avec URL: {self.url}")
@@ -130,7 +153,12 @@ class CameraStream:
         self.thread.start()
 
     def _read_http_frame(self):
-        """Lit une frame depuis un flux MJPEG HTTP (IP Webcam)."""
+        """Lit et decode une frame JPEG depuis un flux MJPEG HTTP (IP Webcam).
+
+        Lit par paquets de 16KB, accumule dans un buffer, cherche les marqueurs
+        JPEG \xff\xd8 (SOI) et \xff\xd9 (EOI), decode avec OpenCV, et retourne
+        la frame. Les buffers trop volumineux (>5MB) sans marqueur sont reinitialises.
+        """
         try:
             if self.http_stream is None:
                 print(f"[CameraStream] Connexion a {self.url}...")
@@ -138,11 +166,8 @@ class CameraStream:
                 self.http_stream = urllib.request.urlopen(req, timeout=15)
                 print(f"[CameraStream] Connecte a {self.url}")
                 self.http_buffer = b""
-            deadline = time.time() + 8
             while self.running:
-                if time.time() > deadline:
-                    raise TimeoutError("Aucune trame JPEG recue dans le delai")
-                chunk = self.http_stream.read(4096)
+                chunk = self.http_stream.read(16384)
                 if not chunk:
                     raise ConnectionError("Fin du flux HTTP")
                 self.http_buffer += chunk
@@ -154,11 +179,13 @@ class CameraStream:
                     frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is not None:
                         self.consecutive_errors = 0
+                        frame = _rotate_to_portrait(frame)
                         return True, frame
                     continue
                 if len(self.http_buffer) > 5_000_000:
                     self.http_buffer = b""
-            return False, None  # self.running est devenu False
+            # self.running est devenu False (release() a ete appelle)
+            return False, None
         except Exception as e:
             print(f"[CameraStream] Erreur HTTP ({type(e).__name__}): {e}")
             if self.http_stream:
@@ -167,25 +194,25 @@ class CameraStream:
             self.http_stream = None
             self.http_buffer = b""
             self.consecutive_errors += 1
+            # Retry progressif : attendre 1s, 2s, 4s... max 10s
+            backoff = min(10, 2 ** self.consecutive_errors)
+            time.sleep(backoff)
             return False, None
 
     def _update(self):
+        """Boucle principale du thread. Alterne entre lecture HTTP MJPEG et VideoCapture OpenCV."""
         while self.running:
             if self.is_http:
                 success, frame = self._read_http_frame()
                 with self.lock:
                     if success:
-                        h, w = frame.shape[:2]
-                        if w > 640:
-                            scale = 640 / w
-                            frame = cv2.resize(frame, (640, int(h * scale)))
                         self.frame = frame
                         self.success = True
                     else:
                         self.success = False
-                        time.sleep(3.0)
                 continue
 
+            # --- Flux fichiers locaux (OpenCV) ---
             if self.cap is None or not self.cap.isOpened():
                 cap = cv2.VideoCapture(self.url)
                 if cap.isOpened():
@@ -199,8 +226,9 @@ class CameraStream:
                     continue
 
             success, frame = self.cap.read()
-            
+
             if not success:
+                # Bouclage auto : revenir au debut de la video
                 try:
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     success, frame = self.cap.read()
@@ -209,7 +237,7 @@ class CameraStream:
 
             with self.lock:
                 if success:
-                    self.frame = frame
+                    self.frame = _rotate_to_portrait(frame)
                     self.success = True
                 else:
                     self.success = False
@@ -219,12 +247,14 @@ class CameraStream:
                     time.sleep(2.0)
 
     def read(self):
+        """Retourne (success: bool, frame: np.ndarray | None) de maniere thread-safe."""
         with self.lock:
             if self.success and self.frame is not None:
                 return True, self.frame.copy()
             return False, None
 
     def release(self):
+        """Arrete le thread et libere les ressources."""
         self.running = False
         if self.http_stream:
             try: self.http_stream.close()
@@ -375,8 +405,8 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
     if not url:
         url = "uploads/demo_video.mp4"
 
-    # Normaliser pour comparaison coherente avec CameraStream.url
-    url_norm = _normalize_url(url) if (url.startswith("http://") or url.startswith("https://")) else url
+    # Normaliser pour comparaison coherente avec CameraStream._normalize_url() (appele dans __init__)
+    url_norm = _normalize_url(url)
 
     with _caps_lock:
         stream = _caps.get(key)
@@ -616,6 +646,8 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
             continue
 
         frame_count += 1
+        # Appliquer la rotation portrait si la frame est en paysage
+        frame = _rotate_to_portrait(frame)
         display_frame = frame.copy()
         current_detections = []
 
@@ -761,12 +793,15 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
 
 def _fetch_http_snapshot(url: str):
     """Requete HTTP directe vers une IP Webcam pour recuperer une frame JPEG.
-       Essaie /shot.jpg, /photo.jpg, /capture, puis la lecture partielle du MJPEG."""
-    # Liste des chemins possibles pour un snapshot
+
+    Essaie plusieurs chemins de snapshot (/shot.jpg, /photo.jpg, /capture...) puis,
+    en fallback, lit les premiers 200KB du flux MJPEG et tente d'en extraire une frame.
+    Retourne la frame en orientation portrait si detectee.
+    """
     parsed = urllib.parse.urlparse(url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     paths_to_try = ["/shot.jpg", "/photo.jpg", "/capture", "/photo", "/snapshot.jpg"]
-    # Ajouter /shot.jpg en remplacant /video /mjpeg /live
+    # Si l'URL se termine par /video, /mjpeg ou /live, les remplacer par /shot.jpg
     current_path = re.sub(r'/(video|mjpeg|live)(\?.*)?$', '/shot.jpg', parsed.path)
     if current_path != parsed.path:
         paths_to_try.insert(0, base + current_path)
@@ -779,12 +814,12 @@ def _fetch_http_snapshot(url: str):
             frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
                 print(f"[Snapshot HTTP] OK via {shot_url} ({len(data)} octets)")
-                return frame
+                return _rotate_to_portrait(frame)
             print(f"[Snapshot HTTP] {shot_url} retourne {len(data)} octets mais non decode")
         except Exception as e:
             print(f"[Snapshot HTTP] {shot_url} -> {type(e).__name__}: {e}")
 
-    # Fallback : lecture partielle du MJPEG (premiers 200KB)
+    # Fallback : lecture partielle du flux MJPEG (premiers 200KB)
     try:
         print(f"[Snapshot HTTP] Fallback lecture partielle de {url}")
         req = urllib.request.Request(url, headers={"User-Agent": "OpenCV"})
@@ -796,7 +831,7 @@ def _fetch_http_snapshot(url: str):
             frame = cv2.imdecode(np.frombuffer(data[a:b+2], dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
                 print(f"[Snapshot HTTP] Frame extraite du MJPEG ({len(data)} octets lus)")
-                return frame
+                return _rotate_to_portrait(frame)
         print(f"[Snapshot HTTP] Aucun JPEG dans le MJPEG ({len(data)} octets)")
     except Exception as e:
         print(f"[Snapshot HTTP] Erreur fallback: {e}")
@@ -810,6 +845,7 @@ def camera_snapshot():
     site = request.args.get('site')
     camera_type = request.args.get('camera_type', 'entry')
 
+    # Recuperer l'URL de la camera depuis la base de donnees
     url = ""
     if site:
         try:
@@ -823,10 +859,11 @@ def camera_snapshot():
         if cfg:
             url = cfg.get(f"camera_url_{camera_type}", "") or ""
 
-    print(f"[DEBUG] camera_snapshot site={site} type={camera_type} url='{url}'")
-    if url and (url.startswith("http://") or url.startswith("https://")):
-        print(f"[DEBUG] camera_snapshot -> _fetch_http_snapshot({url})")
-        frame = _fetch_http_snapshot(url)
+    # Normaliser l'URL pour supporter aussi bien les adresses IP nues que les http:// completes
+    url_norm = _normalize_url(url) if url else ""
+    print(f"[DEBUG] camera_snapshot site={site} type={camera_type} url='{url_norm}'")
+    if url_norm and (url_norm.startswith("http://") or url_norm.startswith("https://")):
+        frame = _fetch_http_snapshot(url_norm)
         if frame is not None:
             display_frame = frame.copy()
             label_flux = f"{site or ''} - {camera_type.upper()}"
@@ -854,11 +891,17 @@ def camera_snapshot():
 
 @app.route('/video_feed')
 def video_feed():
+    """Endpoint MJPEG utilise par la page /live pour la detection en temps reel.
+
+    - Admin : le site est passe en parametre GET (?site=...) ou prend le premier site disponible
+    - Gardien : le site vient du parametre GET ou de sa session (assignation par l'admin)
+    """
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
-    site = session.get('site')
-    if session.get('role') == 'admin':
-        site = request.args.get('site') or (config.UCB_SITES[0] if config.UCB_SITES else None)
+    # Le param GET prime sur la session pour les deux roles
+    site = request.args.get('site') or session.get('site')
+    if not site and session.get('role') == 'admin' and config.UCB_SITES:
+        site = config.UCB_SITES[0]
     camera_type = request.args.get('camera_type', 'entry')
     gid = session.get('user_id') if session.get('role') == 'gardien' else None
     return Response(
