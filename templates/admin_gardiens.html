@@ -19,7 +19,12 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="password">Mot de passe initial</label>
-                        <input type="text" class="form-control" id="password" name="password" minlength="4" placeholder="Laisser vide = généré automatiquement">
+                        <div class="input-group">
+                            <input type="password" class="form-control" id="password" name="password" minlength="4" placeholder="Laisser vide = généré automatiquement">
+                            <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('password', this)" title="Afficher/masquer">
+                                <i class="bi bi-eye"></i>
+                            </button>
+                        </div>
                         <div class="form-check mt-2">
                             <input class="form-check-input" type="checkbox" id="auto_password" name="auto_password" checked>
                             <label class="form-check-label small" for="auto_password">Générer un mot de passe aléatoire (le gardien le changera à la 1<sup>re</sup> connexion)</label>
@@ -77,6 +82,7 @@
                                         </button>
                                     </form>
                                     <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="collapse" data-bs-target="#pwd-{{ g.id }}">Mot de passe</button>
+                                    <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="modal" data-bs-target="#editGardienModal-{{ g.id }}">Modifier</button>
                                     <button type="button" class="btn btn-sm btn-outline-danger btn-delete-gardien" data-gardien-username="{{ g.username }}" data-delete-url="{{ url_for('admin_staff.delete_gardien', user_id=g.id) }}">
                                         Supprimer
                                     </button>
@@ -87,7 +93,12 @@
                                     <form method="post" action="{{ url_for('admin_staff.reset_gardien_password', user_id=g.id) }}" class="row g-2 align-items-end p-3">
                                         <div class="col-md-8">
                                             <label class="form-label small mb-0">Nouveau mot de passe pour {{ g.username }}</label>
-                                            <input type="text" name="new_password" class="form-control form-control-sm" required minlength="4" placeholder="Nouveau mot de passe">
+                                            <div class="input-group">
+                                                <input type="password" name="new_password" class="form-control form-control-sm" required minlength="4" placeholder="Nouveau mot de passe">
+                                                <button class="btn btn-outline-secondary btn-sm" type="button" onclick="togglePassword(this.previousElementSibling, this)" title="Afficher/masquer">
+                                                    <i class="bi bi-eye"></i>
+                                                </button>
+                                            </div>
                                         </div>
                                         <div class="col-md-4">
                                             <button type="submit" class="btn btn-sm btn-primary w-100">Enregistrer</button>
@@ -95,6 +106,45 @@
                                     </form>
                                 </td>
                             </tr>
+                            <!-- Modal Modification Gardien -->
+                            <div class="modal fade" id="editGardienModal-{{ g.id }}" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered">
+                                    <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+                                        <form method="post" action="{{ url_for('admin_staff.update_gardien', user_id=g.id) }}">
+                                            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                                                <h5 class="modal-title"><i class="bi bi-pencil-square text-primary me-2"></i>Modifier le gardien : {{ g.username }}</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+                                            </div>
+                                            <div class="modal-body p-4">
+                                                <div class="mb-3">
+                                                    <label class="form-label small">Nom affiché</label>
+                                                    <input type="text" class="form-control" name="full_name" value="{{ g.full_name or '' }}" placeholder="Prénom Nom">
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label small">Site surveillé</label>
+                                                    <select class="form-select" name="site" required>
+                                                        <option value="">— Choisir —</option>
+                                                        {% for s in ucb_sites %}
+                                                        <option value="{{ s }}" {% if s == g.site %}selected{% endif %}>{{ s }}</option>
+                                                        {% endfor %}
+                                                    </select>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label small">Statut</label>
+                                                    <div>
+                                                        <span class="badge bg-{{ 'success' if g.is_active else 'secondary' }}">{{ 'Actif' if g.is_active else 'Désactivé' }}</span>
+                                                        <small class="text-secondary ms-2">(modifiable via le bouton Activer/Désactiver)</small>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                                                <button type="submit" class="btn btn-primary">Enregistrer les modifications</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
                             {% else %}
                             <tr><td colspan="5" class="text-center text-secondary py-4">Aucun gardien — créez un premier compte à gauche.</td></tr>
                             {% endfor %}

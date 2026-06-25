@@ -99,6 +99,21 @@ def reset_gardien_password(user_id):
     return redirect(url_for("admin_staff.list_gardiens"))
 
 
+@admin_bp.route("/admin/gardiens/<int:user_id>/modifier", methods=["POST"])
+@login_required("admin")
+def update_gardien(user_id):
+    """Modifie le nom affiche et le site d'un gardien existant."""
+    u = User.query.get_or_404(user_id)
+    if u.role != "gardien":
+        flash("Seuls les comptes gardiens peuvent etre modifies ici.", "danger")
+        return redirect(url_for("admin_staff.list_gardiens"))
+    u.full_name = request.form.get("full_name", "").strip() or None
+    u.site = request.form.get("site", "").strip() or None
+    db.session.commit()
+    flash(f"Compte « {u.username} » mis a jour.", "success")
+    return redirect(url_for("admin_staff.list_gardiens"))
+
+
 @admin_bp.route("/admin/gardiens/<int:user_id>/supprimer", methods=["POST"])
 @login_required("admin")
 def delete_gardien(user_id):

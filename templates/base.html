@@ -497,6 +497,19 @@
         }
     }
 
+    // Bascule affichage mot de passe (icone oeil)
+    function togglePassword(inputOrId, btn) {
+        var input = typeof inputOrId === 'string' ? document.getElementById(inputOrId) : inputOrId;
+        if (!input) return;
+        if (input.type === 'password') {
+            input.type = 'text';
+            btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+        } else {
+            input.type = 'password';
+            btn.innerHTML = '<i class="bi bi-eye"></i>';
+        }
+    }
+
     // Système de Toast dynamique et personnalisé
     function showToast(message, category = 'info', duration = 4000) {
         // Les mots de passe générés restent jusqu'à fermeture manuelle

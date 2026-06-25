@@ -18,8 +18,12 @@
         </div>
         <div class="mb-4">
             <label class="form-label" for="password">Mot de passe</label>
-            <input type="password" class="form-control" id="password" name="password" required
-                autocomplete="current-password">
+            <div class="input-group">
+                <input type="password" class="form-control" id="password" name="password" required autocomplete="current-password">
+                <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('password', this)" title="Afficher/masquer">
+                    <i class="bi bi-eye"></i>
+                </button>
+            </div>
         </div>
         <button type="submit" class="btn btn-primary w-100 py-2">Se connecter</button>
     </form>
@@ -28,4 +32,19 @@
     </p>
 </div>
 
+{% block extra_js %}
+<script>
+function togglePassword(inputId, btn) {
+    var input = document.getElementById(inputId);
+    if (!input) return;
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.innerHTML = '<i class="bi bi-eye-slash"></i>';
+    } else {
+        input.type = 'password';
+        btn.innerHTML = '<i class="bi bi-eye"></i>';
+    }
+}
+</script>
+{% endblock %}
 {% endblock %}
