@@ -9,6 +9,7 @@ import re
 import threading
 import urllib.request
 import urllib.parse
+import os
 import subprocess
 from datetime import datetime
 
@@ -361,6 +362,15 @@ class CameraStream:
 
 
 model = YOLO('yolov8n.pt')
+
+PLATE_MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'license_plate.pt')
+plate_model = None
+if os.path.exists(PLATE_MODEL_PATH):
+    try:
+        plate_model = YOLO(PLATE_MODEL_PATH)
+        print(f"[ALPR] Modele plaque charge : {PLATE_MODEL_PATH} (classes: {plate_model.names})")
+    except Exception as e:
+        print(f"[ALPR] Erreur chargement modele plaque: {e}")
 
 frame_skip = 4
 frame_count = 0
@@ -749,6 +759,29 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
             results = model(frame, conf=0.38, verbose=False, imgsz=640)
             banned_set = get_banned_plates(app)
 
+            # Detection des plaques via le modele Ultralytics dedie
+            plate_detections: dict[tuple, dict] = {}  # vehicle_bbox -> {plate_bbox, text}
+            if plate_model is not None:
+                p_results = plate_model(frame, conf=0.4, verbose=False, imgsz=640)
+                for pbox in p_results[0].boxes:
+                    if int(pbox.cls[0]) != 0:
+                        continue
+                    px1, py1, px2, py2 = map(int, pbox.xyxy[0])
+                    pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
+                    for vbox in results[0].boxes:
+                        vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
+                        if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
+                            k = (vx1, vy1, vx2, vy2)
+                            plate_img = frame[py1:py2, px1:px2]
+                            if plate_img.size > 0:
+                                processed = improve_plate_image(plate_img)
+                                if processed is not None:
+                                    raw = pytesseract.image_to_string(processed, config=config.custom_config).strip()
+                                    ptext = post_process_plate(raw)
+                                    if ptext:
+                                        plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
+                            break
+
             for result in results[0].boxes:
                 x1, y1, x2, y2 = map(int, result.xyxy[0])
                 cls_id = int(result.cls[0])
@@ -756,107 +789,78 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                 label = f"{cls_name} {float(result.conf[0]):.2f}"
                 current_detections.append((x1, y1, x2, y2, label))
 
-                # Gestion des types interdits (Camions/Bus)
                 if cls_name in config.FORBIDDEN_YOLO_CLASSES:
                     signal_forbidden_type_detected(cls_name)
                     process_forbidden_vehicle(app, cls_name, site, guardian_id)
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 140, 255), 4)
-                    cv2.putText(
-                        display_frame,
-                        f"INTERDIT {cls_name.upper()}",
-                        (x1, max(35, y1 - 45)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
-                        (0, 140, 255),
-                        3,
-                    )
+                    cv2.putText(display_frame, f"INTERDIT {cls_name.upper()}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 140, 255), 3)
                     continue
 
-                # Zone de plaque
-                h = y2 - y1
-                plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
+                # Recuperer la plaque detectee pour ce vehicule
+                plate = None
+                plate_info = plate_detections.get((x1, y1, x2, y2))
+                if plate_info is not None:
+                    plate = plate_info["text"]
+                    ppx1, ppy1, ppx2, ppy2 = plate_info["bbox"]
+                    cv2.rectangle(display_frame, (ppx1, ppy1), (ppx2, ppy2), (255, 255, 0), 2)
+                    cv2.putText(display_frame, plate, (ppx1, ppy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                else:
+                    h = y2 - y1
+                    plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
+                    if plate_roi.size > 0:
+                        processed = improve_plate_image(plate_roi)
+                        if processed is not None:
+                            raw_text = pytesseract.image_to_string(processed, config=config.custom_config).strip()
+                            plate = post_process_plate(raw_text)
 
-                if plate_roi.size > 0:
-                    processed = improve_plate_image(plate_roi)
-                    if processed is not None:
-                        raw_text = pytesseract.image_to_string(processed, config=config.custom_config).strip()
-                        plate = post_process_plate(raw_text)
-                        if plate:
-                            vinfo = get_vehicle_info(app, plate) or {}
-                            
-                            # Cas d'une plaque bannie
-                            if plate in banned_set or vinfo.get("status") == "banned":
-                                signal_banned_plate_detected(
-                                    plate,
-                                    vinfo.get("owner_phone", ""),
-                                    vinfo.get("owner_email", ""),
-                                )
-                                log_banned_detection_throttled(app, plate, site, guardian_id)
-                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 4)
-                                cv2.putText(
-                                    display_frame,
-                                    f"INTERDIT {plate}",
-                                    (x1, max(35, y1 - 45)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.85,
-                                    (0, 0, 255),
-                                    3,
-                                )
-                            # Cas d'une plaque non autorisee / inconnue
-                            elif not vinfo or vinfo.get("status") not in ("active", "pending"):
-                                signal_unknown_plate_detected(plate)
-                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 165, 255), 4)
-                                cv2.putText(
-                                    display_frame,
-                                    f"INCONNU {plate}",
-                                    (x1, max(35, y1 - 45)),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.8,
-                                    (0, 165, 255),
-                                    3,
-                                )
-                            # Cas d'une plaque autorisee -> Logique de double lecture
+                if not plate:
+                    continue
+
+                vinfo = get_vehicle_info(app, plate) or {}
+
+                if plate in banned_set or vinfo.get("status") == "banned":
+                    signal_banned_plate_detected(plate, vinfo.get("owner_phone", ""), vinfo.get("owner_email", ""))
+                    log_banned_detection_throttled(app, plate, site, guardian_id)
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 4)
+                    cv2.putText(display_frame, f"INTERDIT {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 255), 3)
+                elif not vinfo or vinfo.get("status") not in ("active", "pending"):
+                    signal_unknown_plate_detected(plate)
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 165, 255), 4)
+                    cv2.putText(display_frame, f"INCONNU {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
+                else:
+                    now = time.time()
+                    if camera_type == "entry":
+                        if plate in _authorized_exits:
+                            confirm_exit_in_db(app, plate, site, guardian_id)
+                            _authorized_exits.pop(plate, None)
+                            trigger_gate_simulation(site, "exit", "CLOSE")
+                            cv2.putText(display_frame, f"SORTIE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                        else:
+                            present_plates = get_present_plates()
+                            if plate not in present_plates:
+                                if plate not in _authorized_entries:
+                                    _authorized_entries[plate] = {"timestamp": now, "guardian_id": guardian_id}
+                                    trigger_gate_simulation(site, "entry", "OPEN", plate)
+                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
+                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
                             else:
-                                now = time.time()
-                                if camera_type == "entry":
-                                    # Si le vehicule etait en attente de validation de sortie, sa presence sur la
-                                    # camera d'entree (exterieure) confirme qu'il est sorti.
-                                    if plate in _authorized_exits:
-                                        confirm_exit_in_db(app, plate, site, guardian_id)
-                                        _authorized_exits.pop(plate, None)
-                                        trigger_gate_simulation(site, "exit", "CLOSE")
-                                        cv2.putText(display_frame, f"SORTIE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                    else:
-                                        # Sinon, c'est une intention d'entree. On l'autorise temporairement si pas present.
-                                        present_plates = get_present_plates()
-                                        if plate not in present_plates:
-                                            if plate not in _authorized_entries:
-                                                _authorized_entries[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                                trigger_gate_simulation(site, "entry", "OPEN", plate)
-                                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
-                                            cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                        else:
-                                            cv2.putText(display_frame, f"DEJA PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
-
-                                elif camera_type == "exit":
-                                    # Si le vehicule etait en attente de validation d'entree, sa presence sur la
-                                    # camera de sortie (interieure) confirme qu'il est entre.
-                                    if plate in _authorized_entries:
-                                        confirm_entry_in_db(app, plate, site, guardian_id)
-                                        _authorized_entries.pop(plate, None)
-                                        trigger_gate_simulation(site, "entry", "CLOSE")
-                                        cv2.putText(display_frame, f"ENTREE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                    else:
-                                        # Sinon, c'est une intention de sortie. On l'autorise si present.
-                                        present_plates = get_present_plates()
-                                        if plate in present_plates:
-                                            if plate not in _authorized_exits:
-                                                _authorized_exits[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                                trigger_gate_simulation(site, "exit", "OPEN", plate)
-                                            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
-                                            cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                        else:
-                                            cv2.putText(display_frame, f"NON PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
+                                cv2.putText(display_frame, f"DEJA PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
+                    elif camera_type == "exit":
+                        if plate in _authorized_entries:
+                            confirm_entry_in_db(app, plate, site, guardian_id)
+                            _authorized_entries.pop(plate, None)
+                            trigger_gate_simulation(site, "entry", "CLOSE")
+                            cv2.putText(display_frame, f"ENTREE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                        else:
+                            present_plates = get_present_plates()
+                            if plate in present_plates:
+                                if plate not in _authorized_exits:
+                                    _authorized_exits[plate] = {"timestamp": now, "guardian_id": guardian_id}
+                                    trigger_gate_simulation(site, "exit", "OPEN", plate)
+                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
+                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                            else:
+                                cv2.putText(display_frame, f"NON PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
 
         if current_detections:
             _last_detections_by_site[site_key] = current_detections
