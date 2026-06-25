@@ -8,6 +8,7 @@ import time
 import re
 import threading
 import urllib.request
+import urllib.parse
 from datetime import datetime
 
 from access_logging import (
@@ -101,12 +102,22 @@ init_presence_from_db(app)
 class CameraStream:
     """Classe encapsulant la lecture asynchrone d'un flux video avec support du bouclage auto et IP Webcam HTTP."""
     def __init__(self, url: str):
-        self.url = url
+        u = url.strip()
+        # Normalisation auto : préfixe http:// si adresse IP détectée
+        if u and not u.startswith("http://") and not u.startswith("https://"):
+            if re.match(r"^\d+\.\d+\.\d+\.\d+", u) or re.match(r"^[a-zA-Z0-9.-]+\.(local|lan)$", u):
+                u = "http://" + u
+        # Ajout du chemin /video si juste IP:port
+        if u.startswith("http://") or u.startswith("https://"):
+            parsed = urllib.parse.urlparse(u)
+            if not parsed.path or parsed.path in ("/", ""):
+                u = u.rstrip("/") + "/video"
+        self.url = u
         self.cap = None
         self.frame = None
         self.success = False
         self.running = True
-        self.is_http = url.startswith("http://") or url.startswith("https://")
+        self.is_http = self.url.startswith("http://") or self.url.startswith("https://")
         self.http_stream = None
         self.http_buffer = b""
         self.lock = threading.Lock()
