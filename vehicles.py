@@ -8,7 +8,7 @@ from email_service import (
     notify_owner_reactivated,
     notify_owner_registration,
 )
-from notifications import notify_site_gardiens, create_notification
+from notifications import create_notification
 from scope import vehicles_for_user
 from security_alerts import invalidate_banned_vehicle_cache
 import config

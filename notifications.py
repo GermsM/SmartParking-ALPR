@@ -7,7 +7,7 @@ from flask import Blueprint, flash, jsonify, redirect, render_template, request,
 from sqlalchemy import and_, exists, not_
 
 from auth import login_required
-from models import Notification, NotificationRead, db
+from models import Notification, NotificationRead, db, User
 
 notifications_bp = Blueprint("notifications", __name__)
 
@@ -62,30 +62,6 @@ def create_notification(
     db.session.commit()
     return n
 
-
-def notify_site_gardiens(
-    site: str | None,
-    message: str,
-    *,
-    category: str = "system",
-    plate_number: str | None = None,
-    contact_phone: str | None = None,
-    whatsapp_message: str | None = None,
-    guardian_id: int | None = None,
-) -> Notification | None:
-    if not site:
-        return None
-    return create_notification(
-        message,
-        site=site,
-        category=category,
-        plate_number=plate_number,
-        contact_phone=contact_phone,
-        whatsapp_message=whatsapp_message,
-        guardian_id=guardian_id,
-    )
-
-
 def get_notifications_for_user(role: str | None, site: str | None, limit: int = 50) -> list[Notification]:
     return (
         _notifications_query(role, site)
@@ -122,7 +98,15 @@ def mark_notification_read_for_user(notification_id: int, user_id: int) -> None:
 @login_required()
 def list_notifications():
     user_id = session.get("user_id")
-    items = get_notifications_for_user(session.get("role"), session.get("site"))
+    role = session.get("role")
+    site = session.get("site")
+    if not site and role != "admin" and user_id:
+        user = User.query.get(user_id)
+        if user and user.site:
+            session["site"] = user.site
+            session.modified = True
+            site = user.site
+    items = get_notifications_for_user(role, site)
     read_ids = get_read_ids_for_user(user_id) if user_id else set()
     return render_template("notifications.html", notifications=items, read_ids=read_ids)
 
@@ -130,8 +114,16 @@ def list_notifications():
 @notifications_bp.route("/api/notifications/unread-count")
 @login_required()
 def api_unread_count():
+    role = session.get("role")
+    site = session.get("site")
+    if not site and role != "admin" and session.get("user_id"):
+        user = User.query.get(session["user_id"])
+        if user and user.site:
+            session["site"] = user.site
+            session.modified = True
+            site = user.site
     return jsonify(
-        count=count_unread(session.get("role"), session.get("site"), session.get("user_id"))
+        count=count_unread(role, site, session.get("user_id"))
     )
 
 
@@ -139,6 +131,12 @@ def _user_can_access_notification(n: Notification) -> bool:
     if session.get("role") == "admin":
         return True
     site = session.get("site")
+    if not site and session.get("user_id"):
+        user = User.query.get(session["user_id"])
+        if user and user.site:
+            session["site"] = user.site
+            session.modified = True
+            site = user.site
     if not n.site:
         return True
     return n.site == site
@@ -203,6 +201,12 @@ def delete_notification(nid):
 def clear_all_notifications():
     role = session.get("role")
     site = session.get("site")
+    if not site and role != "admin" and session.get("user_id"):
+        user = User.query.get(session["user_id"])
+        if user and user.site:
+            session["site"] = user.site
+            session.modified = True
+            site = user.site
     
     # We want to clear notifications the user can see.
     items = get_notifications_for_user(role, site, limit=1000)

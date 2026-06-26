@@ -8,7 +8,7 @@ import config
 from auth import login_required
 from frequency_export import pair_access_logs
 from models import AccessLog, User
-from site_policies import max_hours_for_function
+from site_policies import site_policy_bp
 
 logs_bp = Blueprint("logs", __name__)
 
@@ -21,6 +21,12 @@ def view_logs():
         site_policy = None
     else:
         site = session.get("site")
+        if not site and session.get("user_id"):
+            user = User.query.get(session["user_id"])
+            if user and user.site:
+                session["site"] = user.site
+                session.modified = True
+                site = user.site
         logs = (
             AccessLog.query.filter_by(site=site)
             .order_by(AccessLog.timestamp.desc())
@@ -85,6 +91,12 @@ def export_frequency_csv():
 
     if session.get("role") != "admin":
         site = session.get("site")
+        if not site and session.get("user_id"):
+            user = User.query.get(session["user_id"])
+            if user and user.site:
+                session["site"] = user.site
+                session.modified = True
+                site = user.site
         if site:
             q = q.filter(AccessLog.site == site)
 

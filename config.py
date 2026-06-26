@@ -186,12 +186,3 @@ def get_site_policy(site_name: str | None) -> dict:
         "access_end": "22:00",
         "long_stay_hours": 48,
     }
-
-
-def save_yaml_config():
-    """Sauvegarde la configuration actuelle dans le fichier YAML."""
-    try:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(yaml_config, f, default_flow_style=False, allow_unicode=True)
-    except Exception as e:
-        print("Erreur lors de l'ecriture dans config.yaml :", str(e))

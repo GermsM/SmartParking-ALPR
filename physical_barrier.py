@@ -27,7 +27,7 @@ class PhysicalBarrierController:
         Declenche l'ouverture ou la fermeture de la barriere.
         action: 'OPEN' ou 'CLOSE'
         """
-        # Adresses par defaut pour la simulation
+        # Adresses par defaut
         ip = ip_address or "192.168.1.100"
         p = port or 80
 

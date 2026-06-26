@@ -106,14 +106,6 @@ def confirm_exit_in_db(app, plate: str, site: str | None, guardian_id: int | Non
         print(f"[ACCES] Sortie confirmee pour la plaque {plate} du site {site} apres {dur} minutes")
 
 
-def process_plate_detection(app, plate: str, site: str | None, guardian_id: int | None) -> str | None:
-    """
-    Rétrocompatibilite.
-    Dans le cadre de la double-lecture, ce flux direct est remplace par confirm_entry_in_db et confirm_exit_in_db.
-    """
-    return None
-
-
 def process_forbidden_vehicle(app, yolo_class: str, site: str | None, guardian_id: int | None) -> None:
     """Log une tentative d'entree de vehicule interdit (poids lourd, bus)."""
     label = yolo_class.upper()
@@ -140,10 +132,6 @@ def process_forbidden_vehicle(app, yolo_class: str, site: str | None, guardian_i
             )
         )
         db.session.commit()
-
-
-def check_absence_exits(app) -> int:
-    return 0
 
 
 def init_presence_from_db(app) -> None:

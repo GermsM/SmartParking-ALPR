@@ -197,32 +197,3 @@ def notify_owner_long_stay(plate: str, owner_name: str, owner_email: str, hours:
     )
     return send_owner_email(owner_email, subject, body)
 
-
-def notify_owner_unauthorized(plate: str, owner_name: str, owner_email: str, reason: str) -> bool:
-    subject = f"[UCB Parking] Alerte véhicule {plate}"
-    body = (
-        f"Bonjour {owner_name or 'propriétaire'},\n\n"
-        f"Une alerte concerne votre véhicule {plate} : {reason}\n"
-        f"Contactez le gardien du parking si nécessaire.\n\n"
-        f"— Système Parking UCB\n"
-    )
-    return send_owner_email(owner_email, subject, body)
-
-
-def phone_tel_link(phone: str) -> str | None:
-    p = "".join(c for c in (phone or "") if c.isdigit() or c == "+")
-    return f"tel:{p}" if p else None
-
-
-def whatsapp_link(phone: str, message: str = "") -> str | None:
-    p = "".join(c for c in (phone or "") if c.isdigit())
-    if not p:
-        return None
-    if p.startswith("0"):
-        p = "243" + p[1:]
-    base = f"https://wa.me/{p}"
-    if message:
-        from urllib.parse import quote
-
-        base += f"?text={quote(message)}"
-    return base

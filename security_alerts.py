@@ -119,11 +119,6 @@ def get_security_alert_state() -> dict:
         }
 
 
-def get_banned_alert_state() -> dict:
-    """Rétrocompatibilité."""
-    return get_security_alert_state()
-
-
 def log_banned_detection_throttled(app, plate: str, site: str | None, guardian_id: int | None) -> None:
     plate = (plate or "").upper().strip()
     if not plate:

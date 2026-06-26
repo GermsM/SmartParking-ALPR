@@ -17,7 +17,6 @@ from access_logging import (
     confirm_entry_in_db,
     confirm_exit_in_db,
     get_present_plates,
-    check_absence_exits,
     check_long_stay_violations,
     process_forbidden_vehicle,
     init_presence_from_db,
@@ -28,7 +27,7 @@ from dashboard_stats import get_dashboard_kpis
 from db_init import init_app_database
 from email_service import build_long_stay_whatsapp_message, notify_owner_long_stay
 from logs import logs_bp
-from models import db, Vehicle, Site
+from models import db, Vehicle, Site, User
 from notifications import create_notification, maybe_create_export_reminder, notifications_bp
 from security_alerts import (
     get_security_alert_state,
@@ -133,13 +132,12 @@ def _rotate_to_portrait(frame):
 
 
 class CameraStream:
-    """Lecteur asynchrone de flux video avec thread dedie et simulation.
+    """Lecteur asynchrone de flux video avec thread dedie.
 
-    - Flux locaux (fichiers .mp4) : utilise OpenCV VideoCapture avec bouclage
     - Flux HTTP (IP Webcam MJPEG) : parse le MJPEG via urllib en cherchant les marqueurs JPEG
+    - Flux RTSP : utilise FFmpeg en subprocess pour decoder le flux
     - La frame la plus recente est stockee dans self.frame et lue par self.read()
     - Le thread d'arriere-plan tente de se reconnecter automatiquement en cas d'erreur
-    - Si la camera est hors ligne ou le fichier manquant, il passe en mode simulation automatique.
     """
     def __init__(self, url: str, site: str | None = None, camera_type: str = "entry"):
         u = _normalize_url(url)
@@ -157,190 +155,58 @@ class CameraStream:
         self.ffmpeg_process = None
         self.lock = threading.Lock()
         self.consecutive_errors = 0
-        self.is_simulation = False
-        
-        # Variables de simulation animée
-        self.sim_frame_idx = 0
-        self.sim_car_y = 650
-        self.sim_state = "approaching"  # approaching, waiting, passing, leaving, cooldown
-        self.sim_plate = ""
-        self.sim_vehicle_type = "car"
-        self.sim_cooldown_ticks = 0
-        self.mock_detections = None
-        self.sim_plates_pool = ["UCB-MGRM-001", "UCB-STUD-1234", "UCB-VISI-5678", "BANNED-99", "UNKNOWN-XX", "BUS-99"]
+        self.working_mjpeg_url = None  # URL MJPEG qui a reussi
 
-        # Verification immediate pour fichiers locaux inexistants
-        if not self.is_http and not self.is_rtsp:
-            if not os.path.exists(self.url):
-                print(f"[CameraStream] Fichier local '{self.url}' introuvable. Activation immediate de la simulation.")
-                self.is_simulation = True
-
-        print(f"[CameraStream] Initialisation avec URL: {self.url} (http={self.is_http}, rtsp={self.is_rtsp}, sim={self.is_simulation})")
+        print(f"[CameraStream] Initialisation avec URL: {self.url} (http={self.is_http}, rtsp={self.is_rtsp})")
         self.thread = threading.Thread(target=self._update, daemon=True)
         self.thread.start()
 
-    def _generate_simulated_frame(self):
-        """Génère dynamiquement une trame 850x650 simulant l'allée du parking avec barrière et voitures."""
-        frame = np.zeros((650, 850, 3), dtype=np.uint8)
-        
-        # 1. Gazon sur les côtés (vert)
-        cv2.rectangle(frame, (0, 0), (200, 650), (34, 139, 34), -1)
-        cv2.rectangle(frame, (650, 0), (850, 650), (34, 139, 34), -1)
-        
-        # 2. Route (gris)
-        cv2.rectangle(frame, (200, 0), (650, 650), (60, 60, 60), -1)
-        
-        # 3. Lignes blanches discontinues
-        for y in range(0, 650, 40):
-            cv2.rectangle(frame, (422, y), (428, y + 20), (255, 255, 255), -1)
-            
-        # 4. Barrière physique (s'appuie sur get_gate_state_for_site)
-        try:
-            gate_state = get_gate_state_for_site(self.site)
-            gate_status = gate_state.get(f"{self.camera_type}_gate", "closed")
-        except Exception:
-            gate_status = "closed"
-        
-        # Socle de la barrière
-        cv2.rectangle(frame, (180, 280), (220, 340), (128, 128, 128), -1)
-        cv2.circle(frame, (200, 300), 10, (50, 50, 50), -1)
-        
-        # Lisse de la barrière
-        if gate_status == "closed":
-            cv2.line(frame, (200, 300), (380, 300), (0, 0, 255), 12)
-            cv2.line(frame, (230, 300), (260, 300), (255, 255, 255), 12)
-            cv2.line(frame, (290, 300), (320, 300), (255, 255, 255), 12)
-            cv2.line(frame, (350, 300), (370, 300), (255, 255, 255), 12)
-        elif gate_status in ("opening", "closing"):
-            cv2.line(frame, (200, 300), (327, 173), (0, 0, 255), 12)
-            cv2.line(frame, (221, 279), (242, 258), (255, 255, 255), 12)
-            cv2.line(frame, (263, 237), (284, 216), (255, 255, 255), 12)
-            cv2.line(frame, (306, 194), (320, 180), (255, 255, 255), 12)
-        else: # open
-            cv2.line(frame, (200, 300), (200, 120), (0, 0, 255), 12)
-            cv2.line(frame, (200, 270), (200, 240), (255, 255, 255), 12)
-            cv2.line(frame, (200, 210), (200, 180), (255, 255, 255), 12)
-            cv2.line(frame, (200, 150), (200, 130), (255, 255, 255), 12)
-            
-        # 5. Cycle d'animation de la voiture
-        self.sim_frame_idx += 1
-        
-        if not self.sim_plate:
-            # Essayer de piocher des plaques d'immatriculation réelles enregistrées
-            try:
-                from models import Vehicle
-                db_plates = [v.plate_number for v in Vehicle.query.limit(30).all()]
-                pool = list(db_plates) if db_plates else []
-                for p in ["BANNED-99", "UNKNOWN-XX", "BUS-99"]:
-                    if p not in pool: pool.append(p)
-                import random
-                self.sim_plate = random.choice(pool)
-            except Exception:
-                import random
-                self.sim_plate = random.choice(self.sim_plates_pool)
-                
-            if "BUS" in self.sim_plate:
-                self.sim_vehicle_type = "bus"
-            elif "TRUCK" in self.sim_plate:
-                self.sim_vehicle_type = "truck"
-            else:
-                self.sim_vehicle_type = "car"
-
-        speed = 8
-        target_stop_y = 350
-        
-        if self.sim_state == "approaching":
-            self.sim_car_y -= speed
-            if self.sim_car_y <= target_stop_y:
-                self.sim_car_y = target_stop_y
-                self.sim_state = "waiting"
-                self.sim_cooldown_ticks = 0
-                
-        elif self.sim_state == "waiting":
-            # Le véhicule attend d'être lu et que la barrière s'ouvre
-            vx1, vy1, vx2, vy2 = 280, self.sim_car_y - 100, 570, self.sim_car_y + 100
-            px1, py1, px2, py2 = 360, self.sim_car_y + 40, 490, self.sim_car_y + 80
-            
-            self.mock_detections = {
-                "vehicle": (vx1, vy1, vx2, vy2, self.sim_vehicle_type),
-                "plate": (px1, py1, px2, py2, self.sim_plate)
-            }
-            
-            self.sim_cooldown_ticks += 1
-            if gate_status == "open":
-                self.sim_state = "passing"
-                self.mock_detections = None
-            elif self.sim_cooldown_ticks > 80:
-                # Échec d'autorisation ou véhicule banni/inconnu : le véhicule fait demi-tour
-                self.sim_state = "leaving"
-                self.mock_detections = None
-                
-        elif self.sim_state == "passing":
-            self.sim_car_y -= speed
-            if self.sim_car_y < 120:
-                self.sim_state = "leaving"
-                
-        elif self.sim_state == "leaving":
-            if gate_status == "closed" or gate_status == "open":
-                self.sim_car_y -= speed
-            else:
-                self.sim_car_y += speed  # Reculer
-                
-            if self.sim_car_y < -200 or self.sim_car_y > 800:
-                self.sim_car_y = 650
-                self.sim_state = "cooldown"
-                self.sim_cooldown_ticks = 0
-                self.sim_plate = ""
-                self.mock_detections = None
-                
-        elif self.sim_state == "cooldown":
-            self.sim_cooldown_ticks += 1
-            if self.sim_cooldown_ticks > 50:
-                self.sim_state = "approaching"
-                
-        # 6. Dessiner le véhicule
-        if self.sim_state != "cooldown" and -150 < self.sim_car_y < 750:
-            cy = self.sim_car_y
-            if self.sim_vehicle_type == "bus":
-                v_color = (139, 0, 0)
-                cv2.rectangle(frame, (260, cy - 140), (590, cy + 140), v_color, -1)
-                cv2.rectangle(frame, (280, cy - 120), (570, cy - 80), (200, 200, 200), -1)
-            elif self.sim_vehicle_type == "truck":
-                v_color = (0, 69, 139)
-                cv2.rectangle(frame, (270, cy - 110), (580, cy + 110), v_color, -1)
-            else:
-                v_color = (180, 105, 255)
-                if "BANNED" in self.sim_plate:
-                    v_color = (0, 0, 150)
-                elif "UNKNOWN" in self.sim_plate:
-                    v_color = (50, 120, 180)
-                cv2.rectangle(frame, (280, cy - 100), (570, cy + 100), v_color, -1)
-                cv2.rectangle(frame, (310, cy - 50), (540, cy + 50), (40, 40, 40), -1)
-                cv2.circle(frame, (310, cy - 90), 12, (0, 255, 255), -1)
-                cv2.circle(frame, (540, cy - 90), 12, (0, 255, 255), -1)
-                
-            if self.sim_plate:
-                px1, py1, px2, py2 = 360, cy + 40, 490, cy + 80
-                cv2.rectangle(frame, (px1, py1), (px2, py2), (255, 255, 255), -1)
-                cv2.rectangle(frame, (px1, py1), (px2, py2), (0, 0, 0), 2)
-                cv2.putText(frame, self.sim_plate, (px1 + 8, py1 + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
-
-        # 7. Superposition des bandeaux d'état
-        cv2.putText(frame, f"MODE SIMULATION ACTIVE", (220, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        cv2.putText(frame, f"Etat: {self.sim_state.upper()}", (220, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        if self.sim_plate:
-            cv2.putText(frame, f"Plaque: {self.sim_plate}", (220, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            
-        return frame
-
     def _read_http_frame(self):
-        """Lit et decode une frame JPEG depuis un flux MJPEG HTTP (IP Webcam)."""
+        """Lit et decode une frame JPEG depuis un flux MJPEG HTTP (IP Webcam).
+        Essaie plusieurs endpoints MJPEG courants (/video, /mjpeg, /videofeed, /live) et memorise celui qui fonctionne."""
+        if self.working_mjpeg_url is None:
+            # Construire la liste des endpoints MJPEG a tester
+            parsed = urllib.parse.urlparse(self.url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            current_path = parsed.path.rstrip("/")
+            
+            # Si l'URL contient deja un chemin connu, le tester en premier
+            candidates = []
+            if current_path and current_path != "/":
+                candidates.append(self.url)
+            
+            # Endpoints MJPEG courants pour IP Webcam
+            mjpeg_paths = ["/video", "/mjpeg", "/videofeed", "/live", "/stream", "/mjpg"]
+            for p in mjpeg_paths:
+                candidates.append(base + p)
+            
+            print(f"[CameraStream] Test endpoints MJPEG pour {self.url}...")
+            for test_url in candidates:
+                try:
+                    req = urllib.request.Request(test_url, headers={"User-Agent": "OpenCV"})
+                    test_stream = urllib.request.urlopen(req, timeout=5)
+                    # Test de lecture initiale pour verifier que c'est bien du MJPEG
+                    test_chunk = test_stream.read(16384)
+                    test_stream.close()
+                    if test_chunk and (b"\xff\xd8" in test_chunk or b"\xff\xd9" in test_chunk):
+                        self.working_mjpeg_url = test_url
+                        print(f"[CameraStream] Endpoint MJPEG valide trouve: {test_url}")
+                        break
+                except Exception:
+                    continue
+            
+            if self.working_mjpeg_url is None:
+                # Fallback: utiliser l'URL originale
+                self.working_mjpeg_url = self.url
+                print(f"[CameraStream] Aucun endpoint MJPEG detecte, utilisation de l'URL originale: {self.url}")
+        
+        # Maintenant lire depuis l'URL qui fonctionne
         try:
             if self.http_stream is None:
-                print(f"[CameraStream] Connexion a {self.url}...")
-                req = urllib.request.Request(self.url, headers={"User-Agent": "OpenCV"})
+                print(f"[CameraStream] Connexion a {self.working_mjpeg_url}...")
+                req = urllib.request.Request(self.working_mjpeg_url, headers={"User-Agent": "OpenCV"})
                 self.http_stream = urllib.request.urlopen(req, timeout=8)
-                print(f"[CameraStream] Connecte a {self.url}")
+                print(f"[CameraStream] Connecte a {self.working_mjpeg_url}")
                 self.http_buffer = b""
             while self.running:
                 chunk = self.http_stream.read(16384)
@@ -368,25 +234,15 @@ class CameraStream:
                 except: pass
             self.http_stream = None
             self.http_buffer = b""
+            self.working_mjpeg_url = None  # Forcer re-decouverte au prochain essai
             self.consecutive_errors += 1
-            if self.consecutive_errors >= 3:
-                print(f"[CameraStream] 3 erreurs consecutives. Activation simulation.")
-                self.is_simulation = True
             backoff = min(5, 2 ** self.consecutive_errors)
             time.sleep(backoff)
             return False, None
 
     def _update(self):
-        """Boucle principale du thread. Alterne entre lecture HTTP MJPEG et VideoCapture OpenCV."""
+        """Boucle principale du thread. Alterne entre lecture HTTP MJPEG et RTSP via FFmpeg."""
         while self.running:
-            if self.is_simulation:
-                frame = self._generate_simulated_frame()
-                with self.lock:
-                    self.frame = frame
-                    self.success = True
-                time.sleep(0.04)  # ~25 FPS
-                continue
-
             if self.is_rtsp:
                 success, frame = self._read_rtsp_frame()
                 with self.lock:
@@ -418,9 +274,6 @@ class CameraStream:
                     with self.lock:
                         self.success = False
                     self.consecutive_errors += 1
-                    if self.consecutive_errors >= 3:
-                        print(f"[CameraStream] Fichier local '{self.url}' impossible a lire. Activation simulation.")
-                        self.is_simulation = True
                     time.sleep(2.0)
                     continue
 
@@ -443,9 +296,6 @@ class CameraStream:
                         self.cap.release()
                     self.cap = None
                     self.consecutive_errors += 1
-                    if self.consecutive_errors >= 3:
-                        print(f"[CameraStream] Perte de lecture video. Activation simulation.")
-                        self.is_simulation = True
                     time.sleep(2.0)
 
     def _read_rtsp_frame(self):
@@ -500,8 +350,6 @@ class CameraStream:
         except FileNotFoundError:
             print("[CameraStream] FFmpeg introuvable.")
             self.consecutive_errors += 1
-            if self.consecutive_errors >= 3:
-                self.is_simulation = True
             time.sleep(10)
             return False, None
         except Exception as e:
@@ -509,8 +357,6 @@ class CameraStream:
             self._cleanup_ffmpeg()
             self.http_buffer = b""
             self.consecutive_errors += 1
-            if self.consecutive_errors >= 3:
-                self.is_simulation = True
             backoff = min(5, 2 ** self.consecutive_errors)
             time.sleep(backoff)
             return False, None
@@ -553,7 +399,7 @@ if os.path.exists(PLATE_MODEL_PATH):
     except Exception as e:
         print(f"[ALPR] Erreur chargement modele plaque: {e}")
 
-frame_skip = 4
+frame_skip = 5
 frame_count = 0
 _last_detections_by_site: dict[str, list] = {}
 _caps: dict[str, CameraStream] = {}
@@ -585,7 +431,7 @@ def get_gate_state_for_site(site_name: str | None) -> dict:
         now = time.time()
         elapsed = now - state["last_update"]
 
-        # Transitions automatiques pour la simulation
+        # Transitions automatiques d'etat de la barriere
         if state["entry_gate"] == "opening" and elapsed >= 3.0:
             state["entry_gate"] = "open"
             state["last_update"] = now
@@ -611,8 +457,8 @@ def get_gate_state_for_site(site_name: str | None) -> dict:
         return dict(state)
 
 
-def trigger_gate_simulation(site_name: str | None, direction: str, action: str, plate: str | None = None):
-    """Declenche la simulation de la barriere (logicielle et physique IP)."""
+def trigger_gate(site_name: str | None, direction: str, action: str, plate: str | None = None):
+    """Declenche la barriere (etat logiciel + envoi commande physique IP)."""
     key = site_name or "__default__"
     
     # Resolution de l'IP du site
@@ -671,26 +517,28 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
     key = f"{site or '__default__'}_{camera_type}"
     url = ""
     
-    # Recuperation de l'URL dans la base
     if site:
         try:
-            s = Site.query.filter_by(name=site).first()
-            if s:
-                url = (s.camera_url_entry if camera_type == "entry" else s.camera_url_exit) or ""
+            with app.app_context():
+                s = Site.query.filter_by(name=site).first()
+                if s:
+                    url = (s.camera_url_entry if camera_type == "entry" else s.camera_url_exit) or ""
         except Exception:
             pass
             
-    # Fallback config
     if not url:
-        cfg = config.SITE_CONFIG.get(site or "")
-        if cfg:
-            url = cfg.get(f"camera_url_{camera_type}", "") or ""
+        try:
+            cfg = config.SITE_CONFIG.get(site or "")
+            if cfg:
+                url = cfg.get(f"camera_url_{camera_type}", "") or ""
+        except Exception:
+            pass
             
     if not url:
-        url = "uploads/demo_video.mp4"
+        url = ""
 
-    # Normaliser pour comparaison coherente avec CameraStream._normalize_url() (appele dans __init__)
     url_norm = _normalize_url(url)
+    print(f"[STREAM] _get_stream site={site} camera={camera_type} url_raw='{url}' url_norm='{url_norm}'")
 
     with _caps_lock:
         stream = _caps.get(key)
@@ -728,8 +576,51 @@ def _get_placeholder_frame(message="PAS DE SIGNAL"):
     cv2.putText(frame, t_str, (15, 35), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     
     frame = cv2.resize(frame, (850, 650))
-    ret, buffer = cv2.imencode('.jpg', frame)
+    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
     return buffer.tobytes()
+
+
+def _resolve_site():
+    if session.get('role') == 'admin':
+        return request.args.get('site') or session.get('site') or (config.UCB_SITES[0] if config.UCB_SITES else None)
+    
+    site = session.get('site')
+    user_id = session.get('user_id')
+    
+    if not site and user_id:
+        try:
+            user = User.query.get(user_id)
+            if user and user.site:
+                site = user.site
+                session['site'] = site
+                session.modified = True
+                print(f"[SITE] Gardien {user_id} ({user.username}) : site session mis a jour = {site}")
+        except Exception as e:
+            print(f"[SITE] Erreur DB pour gardien {user_id} : {e}")
+    
+    if site:
+        try:
+            s = Site.query.filter_by(name=site).first()
+            if not s:
+                print(f"[SITE] Site '{site}' introuvable en base pour gardien {user_id}")
+                site = None
+        except Exception as e:
+            print(f"[SITE] Erreur verification site pour gardien {user_id} : {e}")
+    
+    if not site:
+        try:
+            sites = config.UCB_SITES
+            if sites:
+                site = sites[0]
+                session['site'] = site
+                session.modified = True
+                print(f"[SITE] Gardien {user_id} : fallback vers premier site = {site}")
+            else:
+                print(f"[SITE] Aucun site disponible pour gardien {user_id}")
+        except Exception as e:
+            print(f"[SITE] Erreur fallback site pour gardien {user_id} : {e}")
+    
+    return site
 
 
 def improve_plate_image(plate_img):
@@ -810,6 +701,12 @@ def index():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
     site = session.get('site') if session.get('role') != 'admin' else None
+    if not site and session.get('role') != 'admin' and session.get('user_id'):
+        user = User.query.get(session['user_id'])
+        if user and user.site:
+            session['site'] = user.site
+            session.modified = True
+            site = user.site
     if session.get('role') == 'admin':
         capacity = sum(cfg.get('capacity', 0) for cfg in config.SITE_CONFIG.values())
     else:
@@ -822,10 +719,7 @@ def index():
 def live():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
-    if session.get('role') == 'admin':
-        site = request.args.get('site') or session.get('site') or (config.UCB_SITES[0] if config.UCB_SITES else None)
-    else:
-        site = session.get('site')
+    site = _resolve_site()
     policy = config.get_site_policy(site)
     return render_template('live_detection.html', site=site, policy=policy)
 
@@ -853,13 +747,6 @@ def admin_videos():
     return render_template("admin_videos.html", sites=sites, focus_site=focus_site)
 
 
-@app.route('/api/security/banned-alert')
-def api_banned_alert():
-    if 'user_id' not in session:
-        return jsonify(error='unauthorized'), 401
-    return jsonify(get_security_alert_state())
-
-
 @app.route('/api/security/alert')
 def api_security_alert():
     if 'user_id' not in session:
@@ -872,9 +759,7 @@ def api_gate_status():
     """Endpoint API retournant l'etat actuel des barrieres pour le site actif."""
     if 'user_id' not in session:
         return jsonify(error='unauthorized'), 401
-    site = session.get('site')
-    if session.get('role') == 'admin':
-        site = request.args.get('site')
+    site = _resolve_site()
     state = get_gate_state_for_site(site)
     return jsonify(state)
 
@@ -885,26 +770,37 @@ def api_gate_control():
     if 'user_id' not in session:
         return jsonify(error='unauthorized'), 401
     
-    site = session.get('site')
+    site = _resolve_site()
     if session.get('role') == 'admin':
-        site = request.form.get('site') or request.json.get('site')
+        site = request.form.get('site') or request.json.get('site') or site
 
     direction = request.form.get('direction', 'entry') or request.json.get('direction', 'entry')
     action = request.form.get('action', 'OPEN') or request.json.get('action', 'OPEN')
     plate = request.form.get('plate') or request.json.get('plate')
 
-    trigger_gate_simulation(site, direction, action, plate)
+    trigger_gate(site, direction, action, plate)
     return jsonify(status='success', site=site, direction=direction, action=action)
 
 
-def generate_frames(site: str | None = None, camera_type: str = "entry", guardian_id: int | None = None):
+def generate_frames(site: str | None = None, camera_type: str = "entry", guardian_id: int | None = None, pre_fetched_url: str = ""):
     global frame_count
     site_key = f"{site or '__default__'}_{camera_type}"
     consecutive_failures = 0
-
+    print(f"[STREAM] Debut generate_frames site={site} camera={camera_type} url='{pre_fetched_url}' guardian={guardian_id}")
+    
+    stream = None
+    if pre_fetched_url:
+        try:
+            stream = CameraStream(pre_fetched_url, site=site, camera_type=camera_type)
+            print(f"[STREAM] CameraStream cree directement avec URL pre-fetchee: {pre_fetched_url}")
+        except Exception as e:
+            print(f"[STREAM] Erreur creation CameraStream: {e}")
+            stream = None
+    
     while True:
         try:
-            stream = _get_stream(site, camera_type)
+            if stream is None:
+                stream = _get_stream(site, camera_type)
             success, frame = stream.read()
             
             if not success:
@@ -933,197 +829,125 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         frame_count += 1
         # Appliquer la rotation portrait si la frame est en paysage
         frame = _rotate_to_portrait(frame)
+        frame = _rotate_to_portrait(frame)
         display_frame = frame.copy()
         current_detections = []
 
-        if getattr(stream, "is_simulation", False):
-            # Mode Simulation : injecter directement les fausses detections
-            mock = getattr(stream, "mock_detections", None)
-            if mock:
-                v_bbox = mock["vehicle"]
-                p_bbox = mock["plate"]
-                
-                vx1, vy1, vx2, vy2, vtype = v_bbox
-                px1, py1, px2, py2, plate = p_bbox
-                
-                banned_set = get_banned_plates(app)
+        if frame_count % frame_skip == 0:
+            results = model(frame, conf=0.38, verbose=False, imgsz=480)
+            banned_set = get_banned_plates(app)
+
+            plate_detections: dict[tuple, dict] = {}
+            if plate_model is not None:
+                p_results = plate_model(frame, conf=0.4, verbose=False, imgsz=320)
+                for pbox in p_results[0].boxes:
+                    if int(pbox.cls[0]) != 0:
+                        continue
+                    px1, py1, px2, py2 = map(int, pbox.xyxy[0])
+                    pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
+                    for vbox in results[0].boxes:
+                        vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
+                        if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
+                            k = (vx1, vy1, vx2, vy2)
+                            plate_img = frame[py1:py2, px1:px2]
+                            if plate_img.size > 0:
+                                processed = improve_plate_image(plate_img)
+                                if processed is not None:
+                                    raw = pytesseract.image_to_string(processed, config=config.custom_config).strip()
+                                    ptext = post_process_plate(raw)
+                                    if ptext:
+                                        plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
+                            break
+
+            for result in results[0].boxes:
+                x1, y1, x2, y2 = map(int, result.xyxy[0])
+                cls_id = int(result.cls[0])
+                cls_name = model.names[cls_id]
+                label = f"{cls_name} {float(result.conf[0]):.2f}"
+                current_detections.append((x1, y1, x2, y2, label))
+
+                if cls_name in config.FORBIDDEN_YOLO_CLASSES:
+                    signal_forbidden_type_detected(cls_name)
+                    process_forbidden_vehicle(app, cls_name, site, guardian_id)
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 140, 255), 4)
+                    cv2.putText(display_frame, f"INTERDIT {cls_name.upper()}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 140, 255), 3)
+                    continue
+
+                plate = None
+                plate_info = plate_detections.get((x1, y1, x2, y2))
+                if plate_info is not None:
+                    plate = plate_info["text"]
+                    ppx1, ppy1, ppx2, ppy2 = plate_info["bbox"]
+                    cv2.rectangle(display_frame, (ppx1, ppy1), (ppx2, ppy2), (255, 255, 0), 2)
+                    cv2.putText(display_frame, plate, (ppx1, ppy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                else:
+                    h = y2 - y1
+                    plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
+                    if plate_roi.size > 0:
+                        processed = improve_plate_image(plate_roi)
+                        if processed is not None:
+                            raw_text = pytesseract.image_to_string(processed, config=config.custom_config).strip()
+                            plate = post_process_plate(raw_text)
+
+                if not plate:
+                    continue
+
                 vinfo = get_vehicle_info(app, plate) or {}
-                
-                current_detections.append((vx1, vy1, vx2, vy2, f"{vtype} 0.95"))
-                
-                # Dessiner le cadre de la plaque
-                cv2.rectangle(display_frame, (px1, py1), (px2, py2), (255, 255, 0), 2)
-                cv2.putText(display_frame, plate, (px1, py1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                
-                if vtype in config.FORBIDDEN_YOLO_CLASSES:
-                    signal_forbidden_type_detected(vtype)
-                    process_forbidden_vehicle(app, vtype, site, guardian_id)
-                    cv2.rectangle(display_frame, (vx1, vy1), (vx2, vy2), (0, 140, 255), 4)
-                    cv2.putText(display_frame, f"INTERDIT {vtype.upper()}", (vx1, max(35, vy1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 140, 255), 3)
-                elif plate in banned_set or vinfo.get("status") == "banned":
+
+                if plate in banned_set or vinfo.get("status") == "banned":
                     signal_banned_plate_detected(plate, vinfo.get("owner_phone", ""), vinfo.get("owner_email", ""))
                     log_banned_detection_throttled(app, plate, site, guardian_id)
-                    cv2.rectangle(display_frame, (vx1, vy1), (vx2, vy2), (0, 0, 255), 4)
-                    cv2.putText(display_frame, f"INTERDIT {plate}", (vx1, max(35, vy1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 255), 3)
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 4)
+                    cv2.putText(display_frame, f"INTERDIT {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 255), 3)
                 elif not vinfo or vinfo.get("status") not in ("active", "pending"):
                     signal_unknown_plate_detected(plate)
-                    cv2.rectangle(display_frame, (vx1, vy1), (vx2, vy2), (0, 165, 255), 4)
-                    cv2.putText(display_frame, f"INCONNU {plate}", (vx1, max(35, vy1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
+                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 165, 255), 4)
+                    cv2.putText(display_frame, f"INCONNU {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
                 else:
                     now = time.time()
                     if camera_type == "entry":
                         if plate in _authorized_exits:
                             confirm_exit_in_db(app, plate, site, guardian_id)
                             _authorized_exits.pop(plate, None)
-                            trigger_gate_simulation(site, "exit", "CLOSE")
-                            cv2.putText(display_frame, f"SORTIE CONFIRMEE {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                            trigger_gate(site, "exit", "CLOSE")
+                            cv2.putText(display_frame, f"SORTIE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
                         else:
                             present_plates = get_present_plates()
                             if plate not in present_plates:
                                 if plate not in _authorized_entries:
                                     _authorized_entries[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                    trigger_gate_simulation(site, "entry", "OPEN", plate)
-                                cv2.rectangle(display_frame, (vx1, vy1), (vx2, vy2), (0, 200, 80), 4)
-                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                                    trigger_gate(site, "entry", "OPEN", plate)
+                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
+                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
                             else:
-                                cv2.putText(display_frame, f"DEJA PRESENT {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
+                                cv2.putText(display_frame, f"DEJA PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
                     elif camera_type == "exit":
                         if plate in _authorized_entries:
                             confirm_entry_in_db(app, plate, site, guardian_id)
                             _authorized_entries.pop(plate, None)
-                            trigger_gate_simulation(site, "entry", "CLOSE")
-                            cv2.putText(display_frame, f"ENTREE CONFIRMEE {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                            trigger_gate(site, "entry", "CLOSE")
+                            cv2.putText(display_frame, f"ENTREE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
                         else:
                             present_plates = get_present_plates()
                             if plate in present_plates:
                                 if plate not in _authorized_exits:
                                     _authorized_exits[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                    trigger_gate_simulation(site, "exit", "OPEN", plate)
-                                cv2.rectangle(display_frame, (vx1, vy1), (vx2, vy2), (0, 200, 80), 4)
-                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
+                                    trigger_gate(site, "exit", "OPEN", plate)
+                                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
+                                cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
                             else:
-                                cv2.putText(display_frame, f"NON PRESENT {plate}", (vx1, vy1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
+                                cv2.putText(display_frame, f"NON PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
+
+        if current_detections:
+            _last_detections_by_site[site_key] = current_detections
         else:
-            # Mode standard (YOLO et Tesseract OCR actif)
-            if frame_count % frame_skip == 0:
-                results = model(frame, conf=0.38, verbose=False, imgsz=640)
-                banned_set = get_banned_plates(app)
-
-                plate_detections: dict[tuple, dict] = {}  # vehicle_bbox -> {plate_bbox, text}
-                if plate_model is not None:
-                    p_results = plate_model(frame, conf=0.4, verbose=False, imgsz=640)
-                    for pbox in p_results[0].boxes:
-                        if int(pbox.cls[0]) != 0:
-                            continue
-                        px1, py1, px2, py2 = map(int, pbox.xyxy[0])
-                        pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
-                        for vbox in results[0].boxes:
-                            vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
-                            if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
-                                k = (vx1, vy1, vx2, vy2)
-                                plate_img = frame[py1:py2, px1:px2]
-                                if plate_img.size > 0:
-                                    processed = improve_plate_image(plate_img)
-                                    if processed is not None:
-                                        raw = pytesseract.image_to_string(processed, config=config.custom_config).strip()
-                                        ptext = post_process_plate(raw)
-                                        if ptext:
-                                            plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
-                                break
-
-                for result in results[0].boxes:
-                    x1, y1, x2, y2 = map(int, result.xyxy[0])
-                    cls_id = int(result.cls[0])
-                    cls_name = model.names[cls_id]
-                    label = f"{cls_name} {float(result.conf[0]):.2f}"
-                    current_detections.append((x1, y1, x2, y2, label))
-
-                    if cls_name in config.FORBIDDEN_YOLO_CLASSES:
-                        signal_forbidden_type_detected(cls_name)
-                        process_forbidden_vehicle(app, cls_name, site, guardian_id)
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 140, 255), 4)
-                        cv2.putText(display_frame, f"INTERDIT {cls_name.upper()}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 140, 255), 3)
-                        continue
-
-                    plate = None
-                    plate_info = plate_detections.get((x1, y1, x2, y2))
-                    if plate_info is not None:
-                        plate = plate_info["text"]
-                        ppx1, ppy1, ppx2, ppy2 = plate_info["bbox"]
-                        cv2.rectangle(display_frame, (ppx1, ppy1), (ppx2, ppy2), (255, 255, 0), 2)
-                        cv2.putText(display_frame, plate, (ppx1, ppy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-                    else:
-                        h = y2 - y1
-                        plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
-                        if plate_roi.size > 0:
-                            processed = improve_plate_image(plate_roi)
-                            if processed is not None:
-                                raw_text = pytesseract.image_to_string(processed, config=config.custom_config).strip()
-                                plate = post_process_plate(raw_text)
-
-                    if not plate:
-                        continue
-
-                    vinfo = get_vehicle_info(app, plate) or {}
-
-                    if plate in banned_set or vinfo.get("status") == "banned":
-                        signal_banned_plate_detected(plate, vinfo.get("owner_phone", ""), vinfo.get("owner_email", ""))
-                        log_banned_detection_throttled(app, plate, site, guardian_id)
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 0, 255), 4)
-                        cv2.putText(display_frame, f"INTERDIT {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 0, 255), 3)
-                    elif not vinfo or vinfo.get("status") not in ("active", "pending"):
-                        signal_unknown_plate_detected(plate)
-                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 165, 255), 4)
-                        cv2.putText(display_frame, f"INCONNU {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
-                    else:
-                        now = time.time()
-                        if camera_type == "entry":
-                            if plate in _authorized_exits:
-                                confirm_exit_in_db(app, plate, site, guardian_id)
-                                _authorized_exits.pop(plate, None)
-                                trigger_gate_simulation(site, "exit", "CLOSE")
-                                cv2.putText(display_frame, f"SORTIE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                            else:
-                                present_plates = get_present_plates()
-                                if plate not in present_plates:
-                                    if plate not in _authorized_entries:
-                                        _authorized_entries[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                        trigger_gate_simulation(site, "entry", "OPEN", plate)
-                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
-                                    cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                else:
-                                    cv2.putText(display_frame, f"DEJA PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
-                        elif camera_type == "exit":
-                            if plate in _authorized_entries:
-                                confirm_entry_in_db(app, plate, site, guardian_id)
-                                _authorized_entries.pop(plate, None)
-                                trigger_gate_simulation(site, "entry", "CLOSE")
-                                cv2.putText(display_frame, f"ENTREE CONFIRMEE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                            else:
-                                present_plates = get_present_plates()
-                                if plate in present_plates:
-                                    if plate not in _authorized_exits:
-                                        _authorized_exits[plate] = {"timestamp": now, "guardian_id": guardian_id}
-                                        trigger_gate_simulation(site, "exit", "OPEN", plate)
-                                    cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 200, 80), 4)
-                                    cv2.putText(display_frame, f"PORTAIL OUVERTURE {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 80), 3)
-                                else:
-                                    cv2.putText(display_frame, f"NON PRESENT {plate}", (x1, y1 - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 165, 0), 3)
-
-            if current_detections:
-                _last_detections_by_site[site_key] = current_detections
+            _last_detections_by_site.pop(site_key, None)
 
         # Dessin des bboxes vertes pour les vehicules
-        if getattr(stream, "is_simulation", False):
-            for det in current_detections:
-                x1, y1, x2, y2, label = det
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(display_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        else:
-            for det in _last_detections_by_site.get(site_key, []):
-                x1, y1, x2, y2, label = det
-                cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(display_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        for det in _last_detections_by_site.get(site_key, []):
+            x1, y1, x2, y2, label = det
+            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(display_frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
         # Affichage du titre du flux
         label_flux = f"{site or ''} - {camera_type.upper()}"
@@ -1138,7 +962,7 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         )
 
         display_frame = cv2.resize(display_frame, (850, 650))
-        ret, buffer = cv2.imencode('.jpg', display_frame)
+        ret, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_bytes = buffer.tobytes()
 
         yield (b'--frame\r\n'
@@ -1196,10 +1020,7 @@ def _fetch_http_snapshot(url: str):
 def camera_snapshot():
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
-    if session.get('role') == 'admin':
-        site = request.args.get('site')
-    else:
-        site = session.get('site')
+    site = _resolve_site()
     camera_type = request.args.get('camera_type', 'entry')
 
     # Recuperer l'URL de la camera depuis la base de donnees
@@ -1218,7 +1039,6 @@ def camera_snapshot():
 
     # Normaliser l'URL pour supporter aussi bien les adresses IP nues que les http:// completes
     url_norm = _normalize_url(url) if url else ""
-    print(f"[DEBUG] camera_snapshot site={site} type={camera_type} url='{url_norm}'")
     if url_norm and (url_norm.startswith("http://") or url_norm.startswith("https://")):
         frame = _fetch_http_snapshot(url_norm)
         if frame is not None:
@@ -1226,7 +1046,7 @@ def camera_snapshot():
             label_flux = f"{site or ''} - {camera_type.upper()}"
             cv2.putText(display_frame, label_flux[:35], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             display_frame = cv2.resize(display_frame, (850, 650))
-            ret, buffer = cv2.imencode('.jpg', display_frame)
+            ret, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             return Response(buffer.tobytes(), mimetype='image/jpeg')
 
     try:
@@ -1237,7 +1057,7 @@ def camera_snapshot():
             label_flux = f"{site or ''} - {camera_type.upper()}"
             cv2.putText(display_frame, label_flux[:35], (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             display_frame = cv2.resize(display_frame, (850, 650))
-            ret, buffer = cv2.imencode('.jpg', display_frame)
+            ret, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             return Response(buffer.tobytes(), mimetype='image/jpeg')
     except Exception:
         pass
@@ -1248,25 +1068,30 @@ def camera_snapshot():
 
 @app.route('/video_feed')
 def video_feed():
-    """Endpoint MJPEG utilise par la page /live pour la detection en temps reel.
-
-    - Admin : le site est passe en parametre GET (?site=...) ou prend le premier site disponible
-    - Gardien : le site vient uniquement de sa session (assignation par l'admin) pour securiser l'acces
-    """
     if 'user_id' not in session:
         return redirect(url_for('auth.login'))
     
-    if session.get('role') == 'admin':
-        site = request.args.get('site') or session.get('site')
-        if not site and config.UCB_SITES:
-            site = config.UCB_SITES[0]
-    else:
-        site = session.get('site')
-        
+    site = _resolve_site()
     camera_type = request.args.get('camera_type', 'entry')
     gid = session.get('user_id') if session.get('role') == 'gardien' else None
+    
+    url = ""
+    if site:
+        try:
+            s = Site.query.filter_by(name=site).first()
+            if s:
+                url = (s.camera_url_entry if camera_type == "entry" else s.camera_url_exit) or ""
+        except Exception:
+            pass
+    if not url:
+        cfg = config.SITE_CONFIG.get(site or "")
+        if cfg:
+            url = cfg.get(f"camera_url_{camera_type}", "") or ""
+    url = _normalize_url(url) if url else ""
+    
+    print(f"[VIDEO_FEED] role={session.get('role')} site={site} camera={camera_type} url='{url}' gid={gid}")
     return Response(
-        generate_frames(site=site, camera_type=camera_type, guardian_id=gid),
+        generate_frames(site=site, camera_type=camera_type, guardian_id=gid, pre_fetched_url=url),
         mimetype='multipart/x-mixed-replace; boundary=frame',
     )
 
