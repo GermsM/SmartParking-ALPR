@@ -18,9 +18,9 @@ tutoré : cas d'utilisation, composants, classes, séquence et activité.
 ## Dictionnaire des données
 
 Le fichier [`../dictionnaire_donnees.md`](../dictionnaire_donnees.md) documente
-toutes les tables (Site, User, Vehicle, AccessLog, Notification, NotificationRead,
-DriverAssignment) : colonnes, types, contraintes, énumérations métier et
-relations de clés étrangères.
+toutes les tables (Site, User, Vehicle, AccessLog, Notification, NotificationRead)
+: colonnes, types, contraintes, énumérations métier et relations de clés
+étrangères.
 
 ## Export automatique
 

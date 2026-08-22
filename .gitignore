@@ -18,6 +18,9 @@ uploads/*
 !uploads/docs/
 !uploads/docs/**
 
+# Identifiants/secret locaux — ne jamais versionner
+uploads/docs/identifiants.md
+
 # Config and credentials
 .env
 site_config.json

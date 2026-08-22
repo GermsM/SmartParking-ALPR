@@ -123,24 +123,6 @@ Contrainte unique : `(notification_id, user_id)`.
 
 ---
 
-## Table `driver_assignment`
-
-Affectation d'un conducteur à un véhicule (piste « gestion des chauffeurs »).
-
-| Colonne | Type | Contraintes | Description |
-|---------|------|-------------|-------------|
-| `id` | Integer | PK, auto | Identifiant |
-| `vehicle_id` | Integer | FK `vehicle.id`, NOT NULL | Véhicule |
-| `driver_name` | String(100) | NOT NULL | Nom du conducteur |
-| `driver_phone` | String(30) | nullable | Téléphone |
-| `assigned_at` | DateTime | NOT NULL, défaut `utcnow` | Début d'affectation |
-| `unassigned_at` | DateTime | nullable | Fin d'affectation (NULL = actif) |
-| `assigned_by` | Integer | FK `user.id`, nullable | Auteur de l'affectation |
-
-Index : `(vehicle_id, unassigned_at)`.
-
----
-
 ## Énumérations métier
 
 - **`user.role`** : `admin`, `gardien`

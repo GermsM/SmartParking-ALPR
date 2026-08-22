@@ -83,21 +83,3 @@ class NotificationRead(db.Model):
     notification_id = db.Column(db.Integer, db.ForeignKey('notification.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     read_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class DriverAssignment(db.Model):
-    __tablename__ = 'driver_assignment'
-    id = db.Column(db.Integer, primary_key=True)
-    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicle.id'), nullable=False)
-    driver_name = db.Column(db.String(100), nullable=False)
-    driver_phone = db.Column(db.String(30))
-    assigned_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    unassigned_at = db.Column(db.DateTime, nullable=True)
-    assigned_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-
-    vehicle = db.relationship('Vehicle', backref=db.backref('driver_assignments', lazy='dynamic'))
-    assigner = db.relationship('User', foreign_keys=[assigned_by], backref='driver_assignments_made')
-
-    __table_args__ = (
-        db.Index('ix_driver_assignment_vehicle_active', 'vehicle_id', 'unassigned_at'),
-    )
