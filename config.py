@@ -1,4 +1,5 @@
 import os
+import secrets
 import yaml
 import pytesseract
 from flask import current_app
@@ -6,19 +7,29 @@ from flask import current_app
 # Chemin absolu vers le fichier de configuration YAML
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.yaml')
 
+# AUCUN secret sensible n'est codé en dur ici : tout provient de variables
+# d'environnement ou du fichier config.yaml (non versionné, voir .gitignore).
+secret_key_env = os.environ.get('UCB_SECRET_KEY', '')
+smtp_password_env = os.environ.get('UCB_SMTP_PASSWORD', '')
+smtp_user_env = os.environ.get('UCB_SMTP_USER', '')
+smtp_host_env = os.environ.get('UCB_SMTP_HOST', 'smtp.gmail.com')
+smtp_port_env = int(os.environ.get('UCB_SMTP_PORT', 587))
+smtp_from_env = os.environ.get('UCB_SMTP_FROM', smtp_user_env)
+recovery_env = os.environ.get('UCB_ADMIN_RECOVERY', '')
+
 # Valeurs de secours par défaut en cas d'absence du fichier YAML
 yaml_config = {
     "tesseract_cmd": r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     "custom_config": r"--oem 3 --psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
     "database_url": "sqlite:///parking.db",
-    "admin_recovery_code": "UCB-RECOVERY-2026",
-    "secret_key": "ucb_parking_secret_key_2026",
+    "admin_recovery_code": recovery_env,
+    "secret_key": secret_key_env,
     "smtp": {
-        "host": "smtp.gmail.com",
-        "port": 587,
-        "user": "system.parking.ucbukavu@gmail.com",
-        "password": "ksrouzqyhllsytjl",
-        "from_address": "system.parking.ucbukavu@gmail.com"
+        "host": smtp_host_env,
+        "port": smtp_port_env,
+        "user": smtp_user_env,
+        "password": smtp_password_env,
+        "from_address": smtp_from_env,
     },
     "forbidden_yolo_classes": ["truck", "bus"],
     "forbidden_vehicle_types": ["camping_car", "poids_lourd", "bus"],
@@ -49,7 +60,7 @@ SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', yaml_config.get("databa
 if SQLALCHEMY_DATABASE_URI.startswith("postgres://"):
     SQLALCHEMY_DATABASE_URI = SQLALCHEMY_DATABASE_URI.replace("postgres://", "postgresql://", 1)
 SQLALCHEMY_TRACK_MODIFICATIONS = False
-SECRET_KEY = os.environ.get('UCB_SECRET_KEY', yaml_config.get("secret_key"))
+SECRET_KEY = os.environ.get('UCB_SECRET_KEY') or yaml_config.get("secret_key") or secrets.token_hex(16)
 
 # Code de récupération de l'administrateur
 ADMIN_RECOVERY_CODE = os.environ.get('UCB_ADMIN_RECOVERY', yaml_config.get("admin_recovery_code"))

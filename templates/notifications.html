@@ -50,21 +50,32 @@
                     <div>{{ n.message }}</div>
                     {% if n.plate_number %}<span class="badge bg-dark mt-1">{{ n.plate_number }}</span>{% endif %}
 
-                    {% if n.whatsapp_message %}
-                    <div class="notif-copy-box" id="copy-{{ n.id }}">{{ n.whatsapp_message }}</div>
-                    <div class="d-flex flex-wrap gap-2 mt-2">
-                        <button type="button" class="btn btn-sm btn-outline-secondary btn-copy-msg" data-target="copy-{{ n.id }}">
-                            <i class="bi bi-clipboard"></i> Copier
-                        </button>
-                        {% if n.contact_phone %}
-                        {% set wa_phone = n.contact_phone|replace(' ', '')|replace('+', '') %}
-                        <a href="https://wa.me/{% if wa_phone.startswith('0') %}243{{ wa_phone[1:] }}{% else %}{{ wa_phone }}{% endif %}?text={{ n.whatsapp_message|urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-success">
-                            <i class="bi bi-whatsapp"></i> WhatsApp
-                        </a>
-                        <a href="tel:{{ n.contact_phone }}" class="btn btn-sm btn-outline-light"><i class="bi bi-telephone"></i> Appeler</a>
+                        {% if n.whatsapp_message %}
+                        <div class="notif-copy-box" id="copy-{{ n.id }}">{{ n.whatsapp_message }}</div>
+                        <div class="d-flex flex-wrap gap-2 mt-2">
+                            <button type="button" class="btn btn-sm btn-outline-secondary btn-copy-msg" data-target="copy-{{ n.id }}">
+                                <i class="bi bi-clipboard"></i> Copier
+                            </button>
+                            {% if session.role == 'admin' %}
+                                {% set wa_phone = n.contact_phone|replace(' ', '')|replace('+', '') %}
+                                {% if n.contact_phone %}
+                                <a href="https://wa.me/{% if wa_phone.startswith('0') %}243{{ wa_phone[1:] }}{% else %}{{ wa_phone }}{% endif %}?text={{ n.whatsapp_message|urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-success">
+                                    <i class="bi bi-whatsapp"></i> WhatsApp
+                                </a>
+                                <a href="tel:{{ n.contact_phone }}" class="btn btn-sm btn-outline-light"><i class="bi bi-telephone"></i> Appeler</a>
+                                {% endif %}
+                            {% else %}
+                                {% if n.contact_phone %}
+                                <button type="button" class="btn btn-sm btn-outline-light btn-contact-owner-notif" data-plate="{{ n.plate_number or '' }}" data-method="call">
+                                    <i class="bi bi-telephone"></i> Contacter
+                                </button>
+                                <button type="button" class="btn btn-sm btn-success btn-contact-owner-notif" data-plate="{{ n.plate_number or '' }}" data-method="whatsapp">
+                                    <i class="bi bi-whatsapp"></i>
+                                </button>
+                                {% endif %}
+                            {% endif %}
+                        </div>
                         {% endif %}
-                    </div>
-                    {% endif %}
                 </div>
                 <div class="notif-actions flex-shrink-0">
                     <div class="btn-group btn-group-sm" role="group">
@@ -206,6 +217,30 @@
             navigator.clipboard.writeText(el.textContent).then(function () {
                 btn.innerHTML = '<i class="bi bi-check2"></i> Copié';
                 setTimeout(function () { btn.innerHTML = '<i class="bi bi-clipboard"></i> Copier'; }, 1500);
+            });
+        });
+    });
+
+    document.querySelectorAll('.btn-contact-owner-notif').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var plate = btn.getAttribute('data-plate') || '';
+            var method = btn.getAttribute('data-method') || 'call';
+            fetch('{{ url_for("api_contact_owner") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'fetch'
+                },
+                body: JSON.stringify({plate: plate, method: method}),
+                credentials: 'same-origin'
+            }).then(function(r) {
+                if (!r.ok) throw new Error('contact');
+                return r.json().then(function(data) {
+                    var link = method === 'whatsapp' ? data.wa_link : data.tel_link;
+                    if (link) window.location.href = link;
+                });
+            }).catch(function() {
+                alert('Erreur lors du contact.');
             });
         });
     });

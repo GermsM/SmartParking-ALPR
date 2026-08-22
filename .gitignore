@@ -12,13 +12,25 @@ env/
 parking.db
 *.sqlite3
 
-# Uploaded images
+# Uploaded images (keep the folder and the docs/, ignore binaries)
 uploads/*
 !uploads/.gitkeep
+!uploads/docs/
+!uploads/docs/**
 
 # Config and credentials
 .env
 site_config.json
+config.yaml
+instance/
+
+# Debug / OCR test artifacts (non projet)
+debug_ocr/
+debug_ocr_conf_upscale/
+test_ocr/
+*.csv
+rapport_test_ocr.md
+test_ocr_conf_upscale.py
 
 # IDEs
 .vscode/

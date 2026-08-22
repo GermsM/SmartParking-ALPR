@@ -1,0 +1,25 @@
+@startuml
+skinparam state {
+  BackgroundColor #FEFECE
+  BorderColor #2E5E8C
+  FontSize 12
+}
+
+title Diagramme d'états — Barrière physique (par site)
+
+[*] --> closed : initialisation
+
+closed --> opening : trigger_gate(OPEN)
+opening --> open : après 3 s (timed)
+open --> closing : après 8 s (timed)
+closing --> closed : après 3 s (timed)
+
+closed --> closed : trigger_gate(CLOSE) ignoré
+open --> open : trigger_gate(OPEN) ignoré
+
+note right of opening
+  La plaque détectée est mémorisée
+  (_authorized_entries / _authorized_exits)
+  pour validation par la 2e caméra.
+end note
+@enduml

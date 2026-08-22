@@ -54,13 +54,25 @@
                         <td class="small">{{ v.vehicle_model or '—' }}</td>
                         <td>{{ v.owner_name }}</td>
                         <td class="small">
-                            {% if v.owner_phone %}<div><a href="tel:{{ v.owner_phone }}" class="text-decoration-none"><i class="bi bi-telephone"></i> {{ v.owner_phone }}</a></div>{% endif %}
-                            {% if v.owner_email %}<div class="text-truncate" style="max-width:10rem;" title="{{ v.owner_email }}"><i class="bi bi-envelope"></i> {{ v.owner_email }}</div>{% endif %}
-                            {% if v.owner_phone %}
-                            {% set wa_phone = v.owner_phone|replace(' ', '')|replace('+', '') %}
-                            <div><a href="https://wa.me/{% if wa_phone.startswith('0') %}243{{ wa_phone[1:] }}{% else %}{{ wa_phone }}{% endif %}?text={{ ('Bonjour, gardien parking UCB — véhicule ' ~ v.plate_number)|urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-success py-0 px-1"><i class="bi bi-whatsapp"></i> WhatsApp</a></div>
+                            {% if session.role == 'admin' %}
+                                {% if v.owner_phone %}<div><a href="tel:{{ v.owner_phone }}" class="text-decoration-none"><i class="bi bi-telephone"></i> {{ v.owner_phone }}</a></div>{% endif %}
+                                {% if v.owner_email %}<div class="text-truncate" style="max-width:10rem;" title="{{ v.owner_email }}"><i class="bi bi-envelope"></i> {{ v.owner_email }}</div>{% endif %}
+                                {% if v.owner_phone %}
+                                {% set wa_phone = v.owner_phone|replace(' ', '')|replace('+', '') %}
+                                <div><a href="https://wa.me/{% if wa_phone.startswith('0') %}243{{ wa_phone[1:] }}{% else %}{{ wa_phone }}{% endif %}?text={{ ('Bonjour, gardien parking UCB — véhicule ' ~ v.plate_number)|urlencode }}" target="_blank" rel="noopener" class="btn btn-sm btn-success py-0 px-1"><i class="bi bi-whatsapp"></i> WhatsApp</a></div>
+                                {% endif %}
+                            {% else %}
+                                {% if v.owner_phone %}
+                                <button type="button" class="btn btn-sm btn-outline-light btn-contact-owner" data-plate="{{ v.plate_number }}" data-method="call">
+                                    <i class="bi bi-telephone"></i> Contacter
+                                </button>
+                                <button type="button" class="btn btn-sm btn-success btn-contact-owner" data-plate="{{ v.plate_number }}" data-method="whatsapp">
+                                    <i class="bi bi-whatsapp"></i>
+                                </button>
+                                {% else %}
+                                <span class="text-secondary">—</span>
+                                {% endif %}
                             {% endif %}
-                            {% if not v.owner_phone and not v.owner_email %}—{% endif %}
                         </td>
                         <td class="small" style="max-width:12rem;">{{ v.owner_address or '—' }}</td>
                         <td class="small">{{ v.function or '—' }}</td>
@@ -184,9 +196,10 @@
                     <button type="submit" class="btn btn-success">Réactiver</button>
                 </form>
             </div>
-        </div>
     </div>
 </div>
+</div>
+
 {% endif %}
 
 {% endblock %}
@@ -249,7 +262,32 @@
             });
         });
     }
-})();
-{% endif %}
+
+    {% endif %}
+
+    document.querySelectorAll('.btn-contact-owner').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var plate = btn.getAttribute('data-plate') || '';
+            var method = btn.getAttribute('data-method') || 'call';
+            fetch('{{ url_for("api_contact_owner") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'fetch'
+                },
+                body: JSON.stringify({plate: plate, method: method}),
+                credentials: 'same-origin'
+            }).then(function(r) {
+                if (!r.ok) throw new Error('contact');
+                return r.json().then(function(data) {
+                    var link = method === 'whatsapp' ? data.wa_link : data.tel_link;
+                    if (link) window.location.href = link;
+                });
+            }).catch(function() {
+                alert('Erreur lors du contact.');
+            });
+        });
+    });
+
 </script>
 {% endblock %}

@@ -1,0 +1,35 @@
+@startuml
+start
+:Utilisateur connecté;
+:Saisir propriétaire et véhicule;
+
+if (Véhicule sans plaque ?) then (oui)
+  :Générer identifiant UCB du site;
+else (non)
+  :Saisir numéro de plaque;
+endif
+
+if (Type interdit ?) then (oui)
+  :Afficher refus;
+  stop
+endif
+
+if (Plaque déjà enregistrée ?) then (oui)
+  :Afficher avertissement;
+  stop
+endif
+
+if (Rôle gardien ?) then (oui)
+  :Créer véhicule au statut pending;
+  :Notifier l'administrateur;
+else (admin)
+  :Créer véhicule au statut active;
+endif
+
+if (E-mail propriétaire fourni ?) then (oui)
+  :Envoyer confirmation e-mail;
+endif
+
+:Afficher succès;
+stop
+@enduml

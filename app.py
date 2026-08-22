@@ -552,17 +552,6 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
         return stream
 
 
-def _release_capture(site: str | None, camera_type: str = "entry"):
-    key = f"{site or '__default__'}_{camera_type}"
-    with _caps_lock:
-        stream = _caps.pop(key, None)
-        if stream is not None:
-            try:
-                stream.release()
-            except Exception:
-                pass
-
-
 def _get_placeholder_frame(message="PAS DE SIGNAL"):
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -623,26 +612,174 @@ def _resolve_site():
     return site
 
 
-def improve_plate_image(plate_img):
+# Formats RDC depuis le décret 08/15 : 4 chiffres, 2 lettres, puis le code
+# provincial à 2 chiffres.  Les 3 caractères CGO à gauche de la plaque ne font
+# pas partie de l'immatriculation et sont volontairement ignorés par l'OCR.
+_DRC_PLATE_RE = re.compile(r"^\d{4}[A-Z]{2}(?:0[1-9]|1\d|2[0-6])$")
+_DRC_LEGACY_PLATE_RE = re.compile(r"^[A-Z]{2}\d{4}[A-Z]{2}$")
+_UCB_PLATE_RE = re.compile(r"^UCB(?:\d{4,8}[A-Z]{0,4}|[A-Z]{2,6}\d{4,8})$")
+_OCR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+_DIGIT_CONFUSIONS = str.maketrans({
+    "O": "0", "Q": "0", "D": "0", "I": "1", "L": "1",
+    "Z": "2", "S": "5", "B": "8", "G": "6",
+})
+_LETTER_CONFUSIONS = str.maketrans({
+    "0": "O", "1": "I", "5": "S", "8": "B", "2": "Z", "6": "G",
+})
+
+
+def _deskew_plate(gray):
+    """Corrige une inclinaison légère sans déformer une plaque déjà droite."""
+    _, foreground = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    points = np.column_stack(np.where(foreground > 0)).astype(np.float32)
+    if len(points) < 20:
+        return gray
+
+    angle = cv2.minAreaRect(points)[-1]
+    # OpenCV renvoie suivant les versions un angle dans [-90, 0[ ou ]0, 90].
+    if angle < -45:
+        angle += 90
+    elif angle > 45:
+        angle -= 90
+    if not 1.0 <= abs(angle) <= 12.0:
+        return gray
+
+    height, width = gray.shape[:2]
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
+    return cv2.warpAffine(
+        gray, matrix, (width, height), flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+
+def improve_plate_image(plate_img, return_variants=False):
+    """Prétraite une plaque pour Tesseract.
+
+    Le redimensionnement n'est déclenché que pour les petits crops : le texte
+    est amené vers ~28 px de haut, sans agrandir inutilement les grandes
+    plaques (ce qui avait dégradé les essais 3x/4x). Avec ``return_variants``,
+    retourne les binarisations adaptive et Otsu pour l'ensemble OCR.
+    """
     if plate_img is None or plate_img.size == 0:
         return None
-    gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+
+    if len(plate_img.shape) == 2:
+        gray = plate_img.copy()
+    elif plate_img.shape[2] == 4:
+        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGRA2GRAY)
+    else:
+        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
+
+    height, width = gray.shape[:2]
+    # Les caractères occupent approximativement 55 % de la hauteur d'une
+    # plaque automobile RDC. Ne jamais réduire une image déjà suffisamment
+    # détaillée : cette règle évite les artefacts observés en upscale 3x/4x.
+    estimated_text_height = max(1.0, height * 0.55)
+    scale = max(1.0, min(4.0, 28.0 / estimated_text_height))
+    if scale > 1.01:
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    gray = _deskew_plate(gray)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-    gray = cv2.bilateralFilter(gray, 9, 75, 75)
-    thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    return thresh
+    gray = cv2.bilateralFilter(gray, 7, 60, 60)
+
+    adaptive = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5,
+    )
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    variants = []
+    for name, binary in (("adaptive", adaptive), ("otsu", otsu)):
+        # Opening retire les petits artefacts holographiques; un closing très
+        # léger rétablit les traits cassés sans fusionner les caractères.
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
+        variants.append((name, cleaned))
+
+    return variants if return_variants else variants[0][1]
+
+
+def _repair_drc_candidate(candidate):
+    """Applique les confusions OCR uniquement aux positions connues du format RDC."""
+    if len(candidate) != 8:
+        return None
+    repaired = candidate[:4].translate(_DIGIT_CONFUSIONS)
+    repaired += candidate[4:6].translate(_LETTER_CONFUSIONS)
+    repaired += candidate[6:].translate(_DIGIT_CONFUSIONS)
+    return repaired if _DRC_PLATE_RE.fullmatch(repaired) else None
 
 
 def post_process_plate(text):
-    text = re.sub(r'[^A-Z0-9]', '', text.upper().strip())
-    if len(text) < 5 or len(text) > 10:
+    """Normalise, corrige et valide un texte OCR de plaque RDC/UCB."""
+    normalized = re.sub(r"[^A-Z0-9]", "", (text or "").upper())
+    if not normalized:
         return None
-    if text.startswith("UCB"):
-        return text if len(text) >= 8 else None
-    if sum(c.isalpha() for c in text) < 2 or sum(c.isdigit() for c in text) < 2:
+
+    # Plaques institutionnelles : UCB0001XXXX ou UCB-BUG-0001 (tirets retirés).
+    if _UCB_PLATE_RE.fullmatch(normalized):
+        return normalized
+
+    # Le texte peut contenir CGO, la numérotation laser ou un caractère parasite
+    # avant/après la série. Examiner donc toutes les fenêtres de 8 caractères.
+    tokens = re.findall(r"[A-Z0-9]{8,}", normalized)
+    for token in tokens:
+        for start in range(len(token) - 7):
+            raw_candidate = token[start:start + 8]
+            repaired = _repair_drc_candidate(raw_candidate)
+            if repaired:
+                return repaired
+
+    # Ancien format RDC XX-0000-XX, conservé pour les véhicules plus anciens.
+    if _DRC_LEGACY_PLATE_RE.fullmatch(normalized):
+        return normalized
+
+    # Fallback conservateur demandé pour les plaques non RDC : 8 à 10
+    # caractères, au moins deux lettres et deux chiffres.
+    if 8 <= len(normalized) <= 10 and sum(c.isalpha() for c in normalized) >= 2 and sum(c.isdigit() for c in normalized) >= 2:
+        return normalized
+    return None
+
+
+def read_plate_text(plate_img, psm_modes=(7, 6, 8)):
+    """OCR multi-PSM/binarisation avec vote; retourne la plaque validée ou None."""
+    variants = improve_plate_image(plate_img, return_variants=True)
+    if not variants:
         return None
-    return text
+
+    candidates = []
+    for variant_index, (_, processed) in enumerate(variants):
+        for psm in psm_modes:
+            ocr_config = f"--oem 3 --psm {psm} -c tessedit_char_whitelist={_OCR_WHITELIST}"
+            try:
+                raw = pytesseract.image_to_string(processed, config=ocr_config).strip()
+            except (pytesseract.TesseractError, OSError):
+                continue
+            plate = post_process_plate(raw)
+            if plate:
+                # PSM 7 convient normalement à une plaque sur une ligne. Le
+                # score ne tranche qu'en cas d'égalité de votes.
+                quality = (12 if psm == 7 else 8 if psm == 6 else 6) - variant_index
+                if _DRC_PLATE_RE.fullmatch(plate):
+                    quality += 4
+                candidates.append((plate, quality))
+
+    if not candidates:
+        return None
+    votes = {}
+    qualities = {}
+    for plate, quality in candidates:
+        votes[plate] = votes.get(plate, 0) + 1
+        qualities[plate] = max(qualities.get(plate, quality), quality)
+    return max(votes, key=lambda plate: (votes[plate], qualities[plate], plate))
+
+
+def _format_wa_phone(phone: str) -> str:
+    p = re.sub(r'\D', '', phone or '')
+    if p.startswith('0'):
+        p = '243' + p[1:]
+    return p
 
 
 def _start_background_thread():
@@ -747,13 +884,6 @@ def admin_videos():
     return render_template("admin_videos.html", sites=sites, focus_site=focus_site)
 
 
-@app.route('/api/security/alert')
-def api_security_alert():
-    if 'user_id' not in session:
-        return jsonify(error='unauthorized'), 401
-    return jsonify(get_security_alert_state())
-
-
 @app.route('/api/gate-status')
 def api_gate_status():
     """Endpoint API retournant l'etat actuel des barrieres pour le site actif."""
@@ -780,6 +910,47 @@ def api_gate_control():
 
     trigger_gate(site, direction, action, plate)
     return jsonify(status='success', site=site, direction=direction, action=action)
+
+
+@app.route('/api/contact-owner', methods=['POST'])
+def api_contact_owner():
+    if 'user_id' not in session:
+        return jsonify(error='unauthorized'), 401
+
+    data = request.get_json(silent=True) or {}
+    plate = (data.get('plate') or '').upper().strip()
+    method = (data.get('method') or 'call').lower()
+
+    if not plate:
+        return jsonify(error='plaque requise'), 400
+    if method not in ('call', 'whatsapp'):
+        return jsonify(error='methode invalide'), 400
+
+    vinfo = get_vehicle_info(app, plate)
+    if not vinfo:
+        return jsonify(error='vehicule introuvable'), 404
+
+    phone = vinfo.get('owner_phone', '') or ''
+    if not phone:
+        return jsonify(error='telephone non renseigne'), 404
+
+    tel_link = f"tel:{phone}"
+    wa_phone = _format_wa_phone(phone)
+    wa_link = f"https://wa.me/{wa_phone}?text={urllib.parse.quote('Alerte parking UCB — vehicule ' + plate)}"
+    # Une redirection tel:/wa.me depuis fetch() est bloquée ou suivie en arrière-plan
+    # par les navigateurs. Le client reçoit donc les deux liens et ouvre celui demandé.
+    return jsonify(tel_link=tel_link, wa_link=wa_link)
+
+
+@app.route('/api/security/alert')
+def api_security_alert():
+    if 'user_id' not in session:
+        return jsonify(error='unauthorized'), 401
+    state = get_security_alert_state()
+    if session.get('role') != 'admin':
+        state = dict(state)
+        state.pop('owner_phone', None)
+    return jsonify(state)
 
 
 def generate_frames(site: str | None = None, camera_type: str = "entry", guardian_id: int | None = None, pre_fetched_url: str = ""):
@@ -829,7 +1000,6 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         frame_count += 1
         # Appliquer la rotation portrait si la frame est en paysage
         frame = _rotate_to_portrait(frame)
-        frame = _rotate_to_portrait(frame)
         display_frame = frame.copy()
         current_detections = []
 
@@ -851,12 +1021,9 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                             k = (vx1, vy1, vx2, vy2)
                             plate_img = frame[py1:py2, px1:px2]
                             if plate_img.size > 0:
-                                processed = improve_plate_image(plate_img)
-                                if processed is not None:
-                                    raw = pytesseract.image_to_string(processed, config=config.custom_config).strip()
-                                    ptext = post_process_plate(raw)
-                                    if ptext:
-                                        plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
+                                ptext = read_plate_text(plate_img)
+                                if ptext:
+                                    plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
                             break
 
             for result in results[0].boxes:
@@ -884,10 +1051,7 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                     h = y2 - y1
                     plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
                     if plate_roi.size > 0:
-                        processed = improve_plate_image(plate_roi)
-                        if processed is not None:
-                            raw_text = pytesseract.image_to_string(processed, config=config.custom_config).strip()
-                            plate = post_process_plate(raw_text)
+                        plate = read_plate_text(plate_roi)
 
                 if not plate:
                     continue

@@ -217,9 +217,13 @@
             msgEl.textContent = 'PLAQUE NON ENREGISTREE — ' + plate;
         }
         contactsEl.innerHTML = '';
-        if (d.owner_phone) {
+        var isAdmin = {{ 'true' if session.role == 'admin' else 'false' }};
+        if (isAdmin && d.owner_phone) {
             contactsEl.innerHTML += '<a class="btn btn-sm btn-light me-1" href="tel:' + d.owner_phone + '"><i class="bi bi-telephone"></i> Appeler</a>';
             contactsEl.innerHTML += '<a class="btn btn-sm btn-success me-1" target="_blank" rel="noopener" href="' + waLink(d.owner_phone, 'Alerte parking UCB — vehicule ' + plate) + '"><i class="bi bi-whatsapp"></i> WhatsApp</a>';
+        } else if (!isAdmin && d.plate) {
+            contactsEl.innerHTML += '<button type="button" class="btn btn-sm btn-light me-1 btn-contact-owner" data-plate="' + plate + '" data-method="call"><i class="bi bi-telephone"></i> Contacter</button>';
+            contactsEl.innerHTML += '<button type="button" class="btn btn-sm btn-success me-1 btn-contact-owner" data-plate="' + plate + '" data-method="whatsapp"><i class="bi bi-whatsapp"></i></button>';
         }
         banner.classList.add('show');
         if (navigator.vibrate) {
@@ -311,6 +315,31 @@
 
     setInterval(pollGate, 1000);
     pollGate();
+
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('.btn-contact-owner');
+        if (!btn) return;
+        e.preventDefault();
+        var plate = btn.getAttribute('data-plate') || '';
+        var method = btn.getAttribute('data-method') || 'call';
+        fetch('{{ url_for("api_contact_owner") }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'fetch'
+            },
+            body: JSON.stringify({plate: plate, method: method}),
+            credentials: 'same-origin'
+        }).then(function(r) {
+            if (!r.ok) throw new Error('contact');
+            return r.json().then(function(data) {
+                var link = method === 'whatsapp' ? data.wa_link : data.tel_link;
+                if (link) window.location.href = link;
+            });
+        }).catch(function() {
+            alert('Erreur lors du contact.');
+        });
+    });
 })();
 </script>
 {% endblock %}
