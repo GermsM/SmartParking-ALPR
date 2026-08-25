@@ -1,0 +1,6 @@
+test_set,image,expected,detected,confidence,ocr_raw,text_final,status
+uploads,0955AE22.jpg,0955AE22,True,0.8961920142173767,,2955RE22,ÉCHEC OCR
+uploads,3092AC22.jpg,3092AC22,True,0.9503244757652283,,3092AO22,ÉCHEC OCR
+uploads,0227AF22.jpg,0227AF22,False,,,,ÉCHEC DÉTECTION
+uploads,1940AG19.jpg,1940AG19,True,0.7482653260231018,,,ÉCHEC OCR
+uploads,6176AC22.jpg,6176AC22,True,0.7655874490737915,,,ÉCHEC OCR

@@ -32,6 +32,7 @@
             --ps-success: #2fb27a;
             --ps-warning: #f0b429;
             --ps-danger: #e85d6a;
+            --ps-info: #17a2b8;
             --ps-navbar-bg: rgba(15, 20, 25, .92);
             --ps-body-grad1: #0b0f14;
             --ps-body-grad2: #121a24;
@@ -51,6 +52,7 @@
             --ps-success: #198754;
             --ps-warning: #cc9a06;
             --ps-danger: #dc3545;
+            --ps-info: #17a2b8;
             --ps-navbar-bg: rgba(255, 255, 255, .96);
             --ps-body-grad1: #eef2f7;
             --ps-body-grad2: #f8fafc;
@@ -128,6 +130,7 @@
         .card-ps.border-accent-warning { border-top: 3px solid var(--ps-warning); }
         .card-ps.border-accent-danger { border-top: 3px solid var(--ps-danger); }
         .card-ps.border-accent-muted { border-top: 3px solid #6c7d95; }
+        .card-ps.border-accent-info { border-top: 3px solid var(--ps-info); }
         .table-darkish {
             --bs-table-bg: var(--ps-surface);
             --bs-table-striped-bg: rgba(128,128,128,.06);
@@ -258,6 +261,7 @@
             width: 90%;
             max-width: 450px;
         }
+        .ps-toast-container-unauth { top: 1.5rem; }
         .ps-toast {
             pointer-events: auto;
             background: rgba(34, 45, 61, 0.85);
@@ -472,7 +476,7 @@
 
     <div class="container page-wrap mt-4">
         <!-- Conteneur pour toasts -->
-        <div id="toast-container" class="ps-toast-container"></div>
+        <div id="toast-container" class="ps-toast-container{% if not session.get('user_id') %} ps-toast-container-unauth{% endif %}"></div>
 
         {% block content %}{% endblock %}
     </div>
@@ -578,6 +582,7 @@
         {% endwith %}
     });
     </script>
+    {% if session.get('user_id') %}
     <script>
     // Surveillance périodique du compteur de notifications
     (function() {
@@ -591,7 +596,9 @@
         }
         setInterval(refreshNotifCount, 30000);
     })();
-
+    </script>
+    {% endif %}
+    <script>
     (function () {
         function syncThemeIcons() {
             var theme = document.documentElement.getAttribute('data-theme') || 'dark';

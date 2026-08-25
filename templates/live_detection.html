@@ -124,8 +124,11 @@
 <div class="row g-4">
     <div class="col-md-6">
         <div class="card card-ps overflow-hidden">
-            <div class="card-header py-2" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
                 <strong class="small text-uppercase"><i class="bi bi-box-arrow-in-right text-success me-1"></i> Camera Entree (Exterieur)</strong>
+                <button type="button" class="btn btn-sm btn-outline-light btn-capture-ocr" data-camera-type="entry" data-site="{{ site|default('')|urlencode }}">
+                    <i class="bi bi-camera me-1"></i> Capturer OCR
+                </button>
             </div>
             <div class="card-body p-2 bg-black">
                 <div class="stream-card">
@@ -137,8 +140,11 @@
     
     <div class="col-md-6">
         <div class="card card-ps overflow-hidden">
-            <div class="card-header py-2" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
+            <div class="card-header py-2 d-flex justify-content-between align-items-center" style="background: var(--ps-surface); border-color: var(--ps-border) !important;">
                 <strong class="small text-uppercase"><i class="bi bi-box-arrow-left text-danger me-1"></i> Camera Sortie (Interieur)</strong>
+                <button type="button" class="btn btn-sm btn-outline-light btn-capture-ocr" data-camera-type="exit" data-site="{{ site|default('')|urlencode }}">
+                    <i class="bi bi-camera me-1"></i> Capturer OCR
+                </button>
             </div>
             <div class="card-body p-2 bg-black">
                 <div class="stream-card">
@@ -187,16 +193,16 @@
             beep(880, 0.14, 220);
             setTimeout(function () { beep(660, 0.12, 220); }, 260);
             setTimeout(function () { beep(880, 0.14, 220); }, 520);
-        } else if (type === 'unknown') {
-            beep(520, 0.1, 180);
-            setTimeout(function () { beep(520, 0.1, 180); }, 200);
+        } else if (type === 'register') {
+            beep(400, 0.1, 150);
+            setTimeout(function () { beep(500, 0.1, 150); }, 180);
         } else {
             beep(300, 0.12, 350);
         }
     }
 
     document.getElementById('alert-dismiss').addEventListener('click', function () {
-        banner.classList.remove('show', 'type-banned', 'type-unknown', 'type-forbidden_type');
+        banner.classList.remove('show', 'type-banned', 'type-unknown', 'type-forbidden_type', 'type-register');
     });
 
     function waLink(phone, text) {
@@ -206,19 +212,24 @@
     }
 
     function showAlert(d) {
-        banner.classList.remove('type-banned', 'type-unknown', 'type-forbidden_type');
+        banner.classList.remove('type-banned', 'type-unknown', 'type-forbidden_type', 'type-register');
         banner.classList.add('type-' + (d.type || 'unknown'));
         var plate = d.plate || '—';
         if (d.type === 'banned') {
             msgEl.textContent = 'VEHICULE INTERDIT — plaque ' + plate;
         } else if (d.type === 'forbidden_type') {
             msgEl.textContent = 'VEHICULE INTERDIT (bus / poids lourd) — ' + plate;
+        } else if (d.type === 'register') {
+            msgEl.textContent = 'PLAQUE À ENREGISTRER — ' + plate;
         } else {
             msgEl.textContent = 'PLAQUE NON ENREGISTREE — ' + plate;
         }
         contactsEl.innerHTML = '';
         var isAdmin = {{ 'true' if session.role == 'admin' else 'false' }};
-        if (isAdmin && d.owner_phone) {
+        if (d.type === 'register' && d.plate) {
+            var addUrl = '{{ url_for("vehicles.add_vehicle") }}?plate_number=' + encodeURIComponent(d.plate);
+            contactsEl.innerHTML += '<a class="btn btn-sm btn-warning me-1" href="' + addUrl + '"><i class="bi bi-plus-circle"></i> Enregistrer la plaque</a>';
+        } else if (isAdmin && d.owner_phone) {
             contactsEl.innerHTML += '<a class="btn btn-sm btn-light me-1" href="tel:' + d.owner_phone + '"><i class="bi bi-telephone"></i> Appeler</a>';
             contactsEl.innerHTML += '<a class="btn btn-sm btn-success me-1" target="_blank" rel="noopener" href="' + waLink(d.owner_phone, 'Alerte parking UCB — vehicule ' + plate) + '"><i class="bi bi-whatsapp"></i> WhatsApp</a>';
         } else if (!isAdmin && d.plate) {
@@ -338,6 +349,36 @@
             });
         }).catch(function() {
             alert('Erreur lors du contact.');
+        });
+    });
+
+    document.querySelectorAll('.btn-capture-ocr').forEach(function(btn) {
+        btn.addEventListener('click', async function() {
+            var cameraType = btn.getAttribute('data-camera-type') || 'entry';
+            var siteParam = btn.getAttribute('data-site') || '';
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Capture...';
+            try {
+                var payload = { camera_type: cameraType };
+                if (siteParam) payload.site = siteParam;
+                var r = await fetch('{{ url_for("api_capture_ocr") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+                    body: JSON.stringify(payload),
+                    credentials: 'same-origin'
+                });
+                var d = await r.json();
+                if (d.plate) {
+                    showToast('Capture OCR : plaque detectee = ' + d.plate + ' (' + d.status + ')', 'success');
+                } else {
+                    showToast(d.message || 'Aucune plaque detectee sur la capture.', 'warning');
+                }
+            } catch (err) {
+                showToast('Erreur lors de la capture OCR.', 'danger');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-camera me-1"></i> Capturer OCR';
+            }
         });
     });
 })();

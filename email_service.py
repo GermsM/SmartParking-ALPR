@@ -19,31 +19,26 @@ def send_owner_email(to_email: str, subject: str, body: str) -> bool:
     if not to_email:
         return False
 
-    import threading
+    if not _smtp_configured():
+        _log.info("[EMAIL SIMULÉ — SMTP non configuré] À: %s | Sujet: %s\n%s", to_email, subject, body)
+        return True
 
-    def _send_thread():
-        if not _smtp_configured():
-            _log.info("[EMAIL SIMULÉ — SMTP non configuré] À: %s | Sujet: %s\n%s", to_email, subject, body)
-            return
-
-        try:
-            msg = MIMEText(body, "plain", "utf-8")
-            msg["Subject"] = subject
-            msg["From"] = config.SMTP_FROM
-            msg["To"] = to_email
-            with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=10) as srv:
-                srv.ehlo()
-                srv.starttls()
-                srv.ehlo()
-                srv.login(config.SMTP_USER, config.SMTP_PASSWORD)
-                srv.send_message(msg)
-            _log.info("E-mail envoyé avec succès à %s", to_email)
-        except Exception as exc:
-            _log.error("Échec envoi email à %s (arrière-plan): %s", to_email, exc)
-
-    t = threading.Thread(target=_send_thread, daemon=True)
-    t.start()
-    return True
+    try:
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = config.SMTP_FROM
+        msg["To"] = to_email
+        with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as srv:
+            srv.ehlo()
+            srv.starttls()
+            srv.ehlo()
+            srv.login(config.SMTP_USER, config.SMTP_PASSWORD)
+            srv.send_message(msg)
+        _log.info("E-mail envoyé avec succès à %s", to_email)
+        return True
+    except Exception as exc:
+        _log.error("Échec envoi email à %s : %s", to_email, exc)
+        return False
 
 
 def notify_owner_registration(

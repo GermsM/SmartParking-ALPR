@@ -100,7 +100,7 @@ def signal_banned_plate_detected(plate: str, owner_phone: str = "", owner_email:
 
 
 def signal_unknown_plate_detected(plate: str) -> None:
-    _signal_alert(plate, "unknown")
+    _signal_alert(plate, "register")
 
 
 def signal_forbidden_type_detected(label: str) -> None:

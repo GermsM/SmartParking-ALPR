@@ -106,6 +106,69 @@ def confirm_exit_in_db(app, plate: str, site: str | None, guardian_id: int | Non
         print(f"[ACCES] Sortie confirmee pour la plaque {plate} du site {site} apres {dur} minutes")
 
 
+def manual_access_in_db(app, plate: str, direction: str, site: str | None, guardian_id: int | None) -> dict:
+    """Enregistre un acces manuel saisi par le gardien (OCR absent ou echoue).
+
+    Cree un AccessLog dont le status est ``"manual"`` — ce statut esttraite comme legitime (non alerte)
+    par les indicateurs du tableau de bord. La plaque est cherchee dans le registre
+    des vehicules afin de fournir au gardien le statut (authorise / inconnu / banni),
+    de la meme facon qu'une detection automatique.
+    """
+    plate = (plate or "").upper().strip()
+    direction = (direction or "entry").lower()
+    if direction not in ("entry", "exit"):
+        direction = "entry"
+
+    status, vehicle_id, site_auth, vehicle = lookup_vehicle_status(app, plate)
+
+    with app.app_context():
+        from models import AccessLog, db, Site
+
+        s_obj = Site.query.filter_by(name=site).first()
+        s_id = s_obj.id if s_obj else None
+
+        log = AccessLog(
+            plate_number=plate,
+            vehicle_id=vehicle_id,
+            action=direction,
+            status="manual",
+            site=site,
+            site_id=s_id,
+            guardian_id=guardian_id,
+        )
+        db.session.add(log)
+        db.session.commit()
+        entry_at = log.timestamp
+
+    now = _now_ts()
+    with _lock:
+        if direction == "entry":
+            _present[plate] = {
+                "last_seen": now,
+                "site": site,
+                "vehicle_id": vehicle_id,
+                "status": status,
+                "entry_log_id": log.id,
+                "entry_at": entry_at,
+            }
+        else:
+            _present.pop(plate, None)
+        _last_event[plate] = now
+
+    print(f"[ACCES] Acces manuel {direction} pour la plaque {plate} sur le site {site} — statut registre: {status}")
+
+    return {
+        "plate": plate,
+        "direction": direction,
+        "registry_status": status,
+        "vehicle_id": vehicle_id,
+        "owner_name": vehicle.owner_name if vehicle else None,
+        "owner_phone": vehicle.owner_phone if vehicle else None,
+        "owner_email": vehicle.owner_email if vehicle else None,
+        "site_authorized": site_auth,
+    }
+
+
 def process_forbidden_vehicle(app, yolo_class: str, site: str | None, guardian_id: int | None) -> None:
     """Log une tentative d'entree de vehicule interdit (poids lourd, bus)."""
     label = yolo_class.upper()

@@ -69,7 +69,7 @@ Bien qu'illustré pour l'UCB, son architecture modulaire permet un déploiement 
 |-----------|------------|
 | **Backend** | Python 3.10+, Flask 3.0 |
 | **ORM** | SQLAlchemy (SQLite / PostgreSQL) |
-| **Computer Vision** | OpenCV, Ultralytics YOLOv8 (`yolov8n.pt`) |
+| **Computer Vision** | OpenCV, Ultralytics YOLOv8 (`yolov8n.pt` + `models/license_plate.pt`) |
 | **OCR** | PyTesseract (Tesseract) |
 | **Frontend** | Bootstrap 5.3, Jinja2, Vanilla JS |
 | **Configuration** | YAML |
@@ -224,6 +224,34 @@ Face aux coupures fréquentes dans la région de Bukavu, le système intègre :
 
 ---
 
+## Reconnaissance de Plaques (ALPR)
+
+### Modèle de détection dédié
+
+Le système utilise un modèle YOLOv8 spécialisé (`models/license_plate.pt`) pour la détection des plaques d'immatriculation, en complément du modèle généraliste `yolov8n.pt` pour la détection des véhicules.
+
+### Pipeline OCR strict
+
+Le pipeline de reconnaissance optique (OCR) a été optimisé avec :
+
+- **Prétraitement multi-variantes** — Binarisations adaptive, Otsu, seuils fixes (`fixed100`, `fixed120`) et version grayscale améliorée
+- **Vote multi-PSM** — Trois modes de segmentation Tesseract (PSM 6, 7, 8) avec pondération par qualité moyenne
+- **Validation stricte** — Seul le format RDC `\d{4}[A-Z]{2}\d{2}` est accepté après corrections positionnelles des confusions OCR (O↔0, I/L↔1, S↔5, B↔8, Z↔2, G↔6)
+- **Aucune correspondance codée en dur** — Le système ne contient aucune règle spécifique à une plaque individuelle
+
+### Tests et résultats
+
+Tests honnêtes sur 10 images de terrain et de test :
+
+| Jeu de test | Images | Taux de réussite |
+|-------------|--------|------------------|
+| `uploads/` (terrain) | 5 | 0% — détection OK, OCR échoue sur 4/5 |
+| `Test_OCR/test_ocr/` | 5 | 40% — 2/5 plaques lues correctement |
+
+Le système est conçu pour être **honnête** : quand il ne peut pas valider une plaque au format strict, il retourne `None` plutôt qu'un texte erroné.
+
+---
+
 ## Installation
 
 ### Prérequis
@@ -354,8 +382,10 @@ SmartParking-ALPR/
 │   ├── notifications.html  # Centre de notifications
 │   └── ...                 # Autres pages
 ├── static/                 # Fichiers statiques (CSS, JS)
-├── uploads/                # Vidéos démo uploadées
-└── yolov8n.pt              # Modèle YOLOv8 pré-entraîné
+├── uploads/                # Vidéos démo uploadées + résultats CSV
+└── models/
+    ├── license_plate.pt    # Modèle YOLOv8 détection plaques (RDC)
+    └── yolov8n.pt          # Modèle YOLOv8 pré-entraîné (véhicules)
 ```
 
 ---

@@ -32,6 +32,7 @@ debug_ocr/
 debug_ocr_conf_upscale/
 test_ocr/
 *.csv
+!uploads/resultats_detection_plaques.csv
 rapport_test_ocr.md
 test_ocr_conf_upscale.py
 

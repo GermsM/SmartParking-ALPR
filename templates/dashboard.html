@@ -56,6 +56,33 @@
         </div>
     </div>
 </div>
+
+<!-- Saisie manuelle de plaque (fallback quand l'OCR echoue ou n'est pas disponible) -->
+<div class="card card-ps mb-4 border-accent-info" id="manualAccessCard">
+    <div class="card-body p-4">
+        <h3 class="h6 text-uppercase text-secondary mb-3"><i class="bi bi-pen-fill me-1"></i> Saisie manuelle de plaque</h3>
+        <form id="manualAccessForm" class="row g-3 align-items-end">
+            <div class="col-md-5">
+                <label class="form-label small mb-0" for="manualPlate">Numéro de plaque</label>
+                <input type="text" class="form-control form-control-sm" id="manualPlate" placeholder="ex: 1234 AB 01" autocomplete="off" inputmode="latin">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label small mb-0" for="manualDirection">Action</label>
+                <select class="form-select form-select-sm" id="manualDirection">
+                    <option value="entry">Entrée</option>
+                    <option value="exit">Sortie</option>
+                </select>
+            </div>
+            <div class="col-md-2 d-grid">
+                <button type="submit" class="btn btn-sm btn-info">Valider</button>
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+                <span id="manualStatusBadge" class="badge bg-secondary fs-6" style="display:none;">—</span>
+            </div>
+        </form>
+        <div class="small text-secondary mt-2">Utilisez cette saisie quand la reconnaissance automatique échoue ou n'est pas disponible.</div>
+    </div>
+</div>
 {% endif %}
 
 <div class="row g-3 g-lg-4 mb-4">
@@ -97,6 +124,29 @@
     </div>
 </div>
 
+{% if session.role == 'admin' and kpi_by_site %}
+<div class="mb-4">
+    <h2 class="h5 mb-3"><i class="bi bi-building me-1"></i> Par site</h2>
+    <div class="row g-3">
+        {% for s in kpi_by_site %}
+        <div class="col-md-6 col-xl-4">
+            <div class="card card-ps h-100 border-accent-muted">
+                <div class="card-header py-2 bg-transparent"><strong>{{ s.site }}</strong></div>
+                <div class="card-body">
+                    <div class="d-flex justify-content-between"><span class="small text-secondary">Presents</span><span class="fw-semibold">{{ s.vehicles_present }}</span></div>
+                    <div class="d-flex justify-content-between"><span class="small text-secondary">Entrees</span><span class="fw-semibold">{{ s.access_today }}</span></div>
+                    <div class="d-flex justify-content-between"><span class="small text-secondary">Alertes</span><span class="fw-semibold">{{ s.alerts_today }}</span></div>
+                    <div class="d-flex justify-content-between"><span class="small text-secondary">Interdits</span><span class="fw-semibold">{{ s.forbidden_today }}</span></div>
+                    <div class="d-flex justify-content-between"><span class="small text-secondary">Actifs</span><span class="fw-semibold">{{ s.registered_active }}</span></div>
+                    <div class="small text-secondary mt-2">Occupation {{ s.occupation_pct }}% sur {{ s.capacity }} places</div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <div class="row g-3 g-lg-4 mb-4">
     <div class="col-md-6 col-lg-4">
         <div class="card card-ps h-100 border-accent-muted">
@@ -105,7 +155,7 @@
                 <div class="metric text-info">{{ kpi.occupation_pct }}%</div>
                 <div class="small text-secondary mt-1">
                     {% if session.role == 'admin' %}
-                    Agrege tous sites - voir par gardien pour le detail
+                    Tous sites UCB
                     {% else %}
                     Sur {{ kpi.capacity }} places - {{ kpi.site_label }}
                     {% endif %}
@@ -219,6 +269,69 @@
             setTimeout(function() { btn.disabled = false; }, 2000);
         });
     });
+
+    // Saisie manuelle de plaque (gardien)
+    var manualForm = document.getElementById('manualAccessForm');
+    if (manualForm) {
+        manualForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var plateInput = document.getElementById('manualPlate');
+            var directionSelect = document.getElementById('manualDirection');
+            var badge = document.getElementById('manualStatusBadge');
+            var submitBtn = manualForm.querySelector('button[type="submit"]');
+
+            var plate = (plateInput.value || '').toUpperCase().trim();
+            var direction = directionSelect.value;
+
+            if (!plate) {
+                showToast('Veuillez saisir un numero de plaque.', 'warning');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            badge.style.display = 'none';
+            try {
+                var r = await fetch('{{ url_for("api_manual_access") }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ plate: plate, direction: direction })
+                });
+                if (!r.ok) {
+                    var err = await r.json();
+                    showToast('Erreur : ' + (err.error || 'impossible de saisir la plaque'), 'danger');
+                    return;
+                }
+                var d = await r.json();
+                var regStatus = d.registry_status;
+                badge.className = 'badge fs-6';
+                badge.style.display = 'inline-block';
+
+                if (regStatus === 'authorized' || regStatus === 'pending') {
+                    badge.className = 'badge bg-success fs-6';
+                    badge.textContent = 'AUTORISE';
+                    if (d.gate_opened) {
+                        showToast('Plaque ' + plate + ' (' + direction + ') — barriere ouverte.', 'success');
+                    } else {
+                        showToast('Plaque ' + plate + ' (' + direction + ') enregistree.', 'success');
+                    }
+                } else if (regStatus === 'unknown') {
+                    badge.className = 'badge bg-warning text-dark fs-6';
+                    badge.textContent = 'INCONNU';
+                    showToast('Plaque ' + plate + ' inconnue du registre. Barriere non ouverte.', 'warning');
+                } else {
+                    badge.className = 'badge bg-danger fs-6';
+                    badge.textContent = 'INTERDIT';
+                    showToast('Plaque ' + plate + ' INTERDITE. Barriere non ouverte.', 'danger');
+                }
+                plateInput.value = '';
+                pollGateStatus();
+            } catch (e) {
+                showToast('Impossible de contacter le serveur.', 'danger');
+            }
+            setTimeout(function() { submitBtn.disabled = false; }, 1500);
+        });
+    }
 
     setInterval(pollGateStatus, 1000);
     pollGateStatus();

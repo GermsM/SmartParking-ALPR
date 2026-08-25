@@ -11,11 +11,29 @@ import urllib.request
 import urllib.parse
 import os
 import subprocess
+import contextlib
+import io
+import sys
 from datetime import datetime
+
+
+@contextlib.contextmanager
+def _suppress_c_stderr():
+    fd = sys.stderr.fileno()
+    saved = os.dup(fd)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, fd)
+    try:
+        yield
+    finally:
+        os.dup2(saved, fd)
+        os.close(saved)
+        os.close(devnull)
 
 from access_logging import (
     confirm_entry_in_db,
     confirm_exit_in_db,
+    manual_access_in_db,
     get_present_plates,
     check_long_stay_violations,
     process_forbidden_vehicle,
@@ -23,7 +41,7 @@ from access_logging import (
 )
 from admin_users import admin_bp
 from auth import auth
-from dashboard_stats import get_dashboard_kpis
+from dashboard_stats import get_dashboard_kpis, get_dashboard_kpis_by_site
 from db_init import init_app_database
 from email_service import build_long_stay_whatsapp_message, notify_owner_long_stay
 from logs import logs_bp
@@ -156,6 +174,7 @@ class CameraStream:
         self.lock = threading.Lock()
         self.consecutive_errors = 0
         self.working_mjpeg_url = None  # URL MJPEG qui a reussi
+        self.last_read = time.time()
 
         print(f"[CameraStream] Initialisation avec URL: {self.url} (http={self.is_http}, rtsp={self.is_rtsp})")
         self.thread = threading.Thread(target=self._update, daemon=True)
@@ -165,17 +184,14 @@ class CameraStream:
         """Lit et decode une frame JPEG depuis un flux MJPEG HTTP (IP Webcam).
         Essaie plusieurs endpoints MJPEG courants (/video, /mjpeg, /videofeed, /live) et memorise celui qui fonctionne."""
         if self.working_mjpeg_url is None:
-            # Construire la liste des endpoints MJPEG a tester
             parsed = urllib.parse.urlparse(self.url)
             base = f"{parsed.scheme}://{parsed.netloc}"
             current_path = parsed.path.rstrip("/")
             
-            # Si l'URL contient deja un chemin connu, le tester en premier
             candidates = []
             if current_path and current_path != "/":
                 candidates.append(self.url)
             
-            # Endpoints MJPEG courants pour IP Webcam
             mjpeg_paths = ["/video", "/mjpeg", "/videofeed", "/live", "/stream", "/mjpg"]
             for p in mjpeg_paths:
                 candidates.append(base + p)
@@ -185,7 +201,6 @@ class CameraStream:
                 try:
                     req = urllib.request.Request(test_url, headers={"User-Agent": "OpenCV"})
                     test_stream = urllib.request.urlopen(req, timeout=5)
-                    # Test de lecture initiale pour verifier que c'est bien du MJPEG
                     test_chunk = test_stream.read(16384)
                     test_stream.close()
                     if test_chunk and (b"\xff\xd8" in test_chunk or b"\xff\xd9" in test_chunk):
@@ -196,16 +211,14 @@ class CameraStream:
                     continue
             
             if self.working_mjpeg_url is None:
-                # Fallback: utiliser l'URL originale
                 self.working_mjpeg_url = self.url
                 print(f"[CameraStream] Aucun endpoint MJPEG detecte, utilisation de l'URL originale: {self.url}")
         
-        # Maintenant lire depuis l'URL qui fonctionne
         try:
             if self.http_stream is None:
                 print(f"[CameraStream] Connexion a {self.working_mjpeg_url}...")
                 req = urllib.request.Request(self.working_mjpeg_url, headers={"User-Agent": "OpenCV"})
-                self.http_stream = urllib.request.urlopen(req, timeout=8)
+                self.http_stream = urllib.request.urlopen(req, timeout=5)
                 print(f"[CameraStream] Connecte a {self.working_mjpeg_url}")
                 self.http_buffer = b""
             while self.running:
@@ -214,16 +227,20 @@ class CameraStream:
                     raise ConnectionError("Fin du flux HTTP")
                 self.http_buffer += chunk
                 a = self.http_buffer.find(b"\xff\xd8")
-                b = self.http_buffer.find(b"\xff\xd9")
-                if a != -1 and b != -1 and b > a:
-                    jpg = self.http_buffer[a:b+2]
-                    self.http_buffer = self.http_buffer[b+2:]
-                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                    if frame is not None:
-                        self.consecutive_errors = 0
-                        frame = _rotate_to_portrait(frame)
-                        return True, frame
-                    continue
+                while a != -1:
+                    b = self.http_buffer.find(b"\xff\xd9", a + 2)
+                    if b != -1 and b > a:
+                        jpg = self.http_buffer[a:b+2]
+                        with _suppress_c_stderr():
+                            frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            self.http_buffer = self.http_buffer[b+2:]
+                            self.consecutive_errors = 0
+                            frame = _rotate_to_portrait(frame)
+                            return True, frame
+                        a = self.http_buffer.find(b"\xff\xd8", a + 1)
+                    else:
+                        break
                 if len(self.http_buffer) > 5_000_000:
                     self.http_buffer = b""
             return False, None
@@ -234,9 +251,8 @@ class CameraStream:
                 except: pass
             self.http_stream = None
             self.http_buffer = b""
-            self.working_mjpeg_url = None  # Forcer re-decouverte au prochain essai
             self.consecutive_errors += 1
-            backoff = min(5, 2 ** self.consecutive_errors)
+            backoff = min(2.0, 0.3 * self.consecutive_errors)
             time.sleep(backoff)
             return False, None
 
@@ -337,7 +353,8 @@ class CameraStream:
                 if a != -1 and b != -1 and b > a:
                     jpg = buf[a:b + 2]
                     self.http_buffer = buf[b + 2:]
-                    frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    with _suppress_c_stderr():
+                        frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if frame is not None:
                         self.consecutive_errors = 0
                         frame = _rotate_to_portrait(frame)
@@ -357,7 +374,7 @@ class CameraStream:
             self._cleanup_ffmpeg()
             self.http_buffer = b""
             self.consecutive_errors += 1
-            backoff = min(5, 2 ** self.consecutive_errors)
+            backoff = min(2.0, 0.3 * self.consecutive_errors)
             time.sleep(backoff)
             return False, None
 
@@ -372,6 +389,7 @@ class CameraStream:
 
     def read(self):
         with self.lock:
+            self.last_read = time.time()
             if self.success and self.frame is not None:
                 return True, self.frame.copy()
             return False, None
@@ -404,11 +422,32 @@ frame_count = 0
 _last_detections_by_site: dict[str, list] = {}
 _caps: dict[str, CameraStream] = {}
 _caps_lock = threading.Lock()
+_CAPS_CLEANUP_TIMEOUT = 45.0  # secondes sans lecture avant suppression
 _long_stay_notified: set[str] = set()
+
+
+def _cleanup_old_streams():
+    while True:
+        time.sleep(30)
+        now = time.time()
+        with _caps_lock:
+            for key in list(_caps.keys()):
+                stream = _caps.get(key)
+                if stream is None:
+                    continue
+                if now - getattr(stream, "last_read", 0) > _CAPS_CLEANUP_TIMEOUT:
+                    print(f"[CLEANUP] Release ancien stream {key} (non utilise depuis {now - stream.last_read:.0f}s)")
+                    stream.release()
+                    _caps.pop(key, None)
+
+
+_cleanup_thread = threading.Thread(target=_cleanup_old_streams, daemon=True)
+_cleanup_thread.start()
 
 # State machine pour la double-lecture
 _authorized_entries: dict[str, dict] = {}  # plate -> {timestamp, guardian_id}
 _authorized_exits: dict[str, dict] = {}    # plate -> {timestamp, guardian_id}
+_ENTRY_CONFIRMATION_TIMEOUT_SEC = 10.0      # backup : confirme l'entree si la camera de sortie ne la valide pas
 
 _gate_states: dict[str, dict] = {}         # site_name -> {entry_gate, exit_gate, entry_plate, exit_plate, last_update}
 _gate_lock = threading.Lock()
@@ -546,6 +585,13 @@ def _get_stream(site: str | None, camera_type: str = "entry") -> CameraStream:
             if stream:
                 print(f"[_get_stream] Release ancien stream (url stream={stream.url}, url request={url_norm})")
                 stream.release()
+            other_type = "exit" if camera_type == "entry" else "entry"
+            other_key = f"{site or '__default__'}_{other_type}"
+            other_stream = _caps.get(other_key)
+            if other_stream is not None and other_stream.url == url_norm and other_stream.running:
+                print(f"[STREAM] Partage du stream {other_key} -> {key}")
+                _caps[key] = other_stream
+                return other_stream
             print(f"[_get_stream] Nouveau CameraStream pour {key} -> {url}")
             stream = CameraStream(url, site=site, camera_type=camera_type)
             _caps[key] = stream
@@ -659,7 +705,8 @@ def improve_plate_image(plate_img, return_variants=False):
     Le redimensionnement n'est déclenché que pour les petits crops : le texte
     est amené vers ~28 px de haut, sans agrandir inutilement les grandes
     plaques (ce qui avait dégradé les essais 3x/4x). Avec ``return_variants``,
-    retourne les binarisations adaptive et Otsu pour l'ensemble OCR.
+    retourne plusieurs binarisations et une version grayscale sans seuillage
+    pour l'ensemble OCR.
     """
     if plate_img is None or plate_img.size == 0:
         return None
@@ -672,9 +719,6 @@ def improve_plate_image(plate_img, return_variants=False):
         gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
 
     height, width = gray.shape[:2]
-    # Les caractères occupent approximativement 55 % de la hauteur d'une
-    # plaque automobile RDC. Ne jamais réduire une image déjà suffisamment
-    # détaillée : cette règle évite les artefacts observés en upscale 3x/4x.
     estimated_text_height = max(1.0, height * 0.55)
     scale = max(1.0, min(4.0, 28.0 / estimated_text_height))
     if scale > 1.01:
@@ -689,14 +733,28 @@ def improve_plate_image(plate_img, return_variants=False):
         gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5,
     )
     _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    median = cv2.medianBlur(gray, 3)
+    _, fixed100 = cv2.threshold(median, 100, 255, cv2.THRESH_BINARY)
+    _, fixed120 = cv2.threshold(median, 120, 255, cv2.THRESH_BINARY)
+
+    clahe_strong = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+    gray_strong = clahe_strong.apply(gray)
+    gray_strong = cv2.bilateralFilter(gray_strong, 9, 75, 75)
+
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     variants = []
-    for name, binary in (("adaptive", adaptive), ("otsu", otsu)):
-        # Opening retire les petits artefacts holographiques; un closing très
-        # léger rétablit les traits cassés sans fusionner les caractères.
+    for name, binary in (
+        ("adaptive", adaptive),
+        ("otsu", otsu),
+        ("fixed100", fixed100),
+        ("fixed120", fixed120),
+    ):
         cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
         variants.append((name, cleaned))
+
+    variants.append(("grayscale_strong", gray_strong))
 
     return variants if return_variants else variants[0][1]
 
@@ -731,14 +789,6 @@ def post_process_plate(text):
             if repaired:
                 return repaired
 
-    # Ancien format RDC XX-0000-XX, conservé pour les véhicules plus anciens.
-    if _DRC_LEGACY_PLATE_RE.fullmatch(normalized):
-        return normalized
-
-    # Fallback conservateur demandé pour les plaques non RDC : 8 à 10
-    # caractères, au moins deux lettres et deux chiffres.
-    if 8 <= len(normalized) <= 10 and sum(c.isalpha() for c in normalized) >= 2 and sum(c.isdigit() for c in normalized) >= 2:
-        return normalized
     return None
 
 
@@ -768,11 +818,12 @@ def read_plate_text(plate_img, psm_modes=(7, 6, 8)):
     if not candidates:
         return None
     votes = {}
-    qualities = {}
+    quality_sums = {}
     for plate, quality in candidates:
         votes[plate] = votes.get(plate, 0) + 1
-        qualities[plate] = max(qualities.get(plate, quality), quality)
-    return max(votes, key=lambda plate: (votes[plate], qualities[plate], plate))
+        quality_sums[plate] = quality_sums.get(plate, 0) + quality
+    avg_qualities = {plate: quality_sums[plate] / votes[plate] for plate in votes}
+    return max(votes, key=lambda plate: (avg_qualities[plate], votes[plate], plate))
 
 
 def _format_wa_phone(phone: str) -> str:
@@ -849,7 +900,8 @@ def index():
     else:
         capacity = config.get_site_capacity(site)
     kpi = get_dashboard_kpis(session.get('role'), site, capacity)
-    return render_template('dashboard.html', kpi=kpi)
+    kpi_by_site = get_dashboard_kpis_by_site(session.get('role')) if session.get('role') == 'admin' else []
+    return render_template('dashboard.html', kpi=kpi, kpi_by_site=kpi_by_site)
 
 
 @app.route('/live')
@@ -912,6 +964,62 @@ def api_gate_control():
     return jsonify(status='success', site=site, direction=direction, action=action)
 
 
+@app.route('/api/manual-access', methods=['POST'])
+def api_manual_access():
+    """Endpoint API permettant au gardien de saisir manuellement une plaque
+    quand la reconnaissance automatique echoue ou n'est pas disponible.
+
+    Cree un AccessLog avec status='manual' et, pour les vehicules autorises,
+    declenche l'ouverture de la barriere. Le statut du registre (authorise /
+    inconnu / banni) est renvoye pour affichage, comme une detection automatique.
+    """
+    if 'user_id' not in session:
+        return jsonify(error='unauthorized'), 401
+
+    if session.get('role') != 'gardien':
+        return jsonify(error='acces reserve aux gardiens'), 403
+
+    data = request.get_json(silent=True) or {}
+    if not data:
+        data = request.form.to_dict()
+
+    plate = (data.get('plate') or '').upper().strip()
+    direction = (data.get('direction') or data.get('action') or 'entry').lower()
+    if direction in ('exit', 'sortie', 'out'):
+        direction = 'exit'
+    elif direction in ('entry', 'entree', 'in'):
+        direction = 'entry'
+
+    if not plate:
+        return jsonify(error='plaque requise'), 400
+
+    site = _resolve_site()
+    guardian_id = session.get('user_id')
+
+    info = manual_access_in_db(app, plate, direction, site, guardian_id)
+    registry_status = info.get('registry_status', 'unknown')
+
+    gate_opened = False
+    if registry_status in ('authorized', 'pending'):
+        trigger_gate(site, direction, 'OPEN', plate)
+        gate_opened = True
+
+    return jsonify(
+        status='success',
+        plate=plate,
+        direction=direction,
+        site=site,
+        registry_status=registry_status,
+        gate_opened=gate_opened,
+        vehicle={
+            'owner_name': info.get('owner_name'),
+            'owner_phone': info.get('owner_phone'),
+            'owner_email': info.get('owner_email'),
+            'site_authorized': info.get('site_authorized'),
+        } if registry_status != 'unknown' else None,
+    )
+
+
 @app.route('/api/contact-owner', methods=['POST'])
 def api_contact_owner():
     if 'user_id' not in session:
@@ -953,25 +1061,16 @@ def api_security_alert():
     return jsonify(state)
 
 
-def generate_frames(site: str | None = None, camera_type: str = "entry", guardian_id: int | None = None, pre_fetched_url: str = ""):
+def generate_frames(site: str | None = None, camera_type: str = "entry", guardian_id: int | None = None):
     global frame_count
     site_key = f"{site or '__default__'}_{camera_type}"
     consecutive_failures = 0
-    print(f"[STREAM] Debut generate_frames site={site} camera={camera_type} url='{pre_fetched_url}' guardian={guardian_id}")
+    print(f"[STREAM] Debut generate_frames site={site} camera={camera_type} guardian={guardian_id}")
     
-    stream = None
-    if pre_fetched_url:
-        try:
-            stream = CameraStream(pre_fetched_url, site=site, camera_type=camera_type)
-            print(f"[STREAM] CameraStream cree directement avec URL pre-fetchee: {pre_fetched_url}")
-        except Exception as e:
-            print(f"[STREAM] Erreur creation CameraStream: {e}")
-            stream = None
+    stream = _get_stream(site, camera_type)
     
     while True:
         try:
-            if stream is None:
-                stream = _get_stream(site, camera_type)
             success, frame = stream.read()
             
             if not success:
@@ -1002,19 +1101,37 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         frame = _rotate_to_portrait(frame)
         display_frame = frame.copy()
         current_detections = []
+        all_plate_boxes: list[tuple[int, int, int, int, float]] = []
 
         if frame_count % frame_skip == 0:
+            # Backup timeout : si la camera de sortie n'a pas confirme l'entree
+            # dans les delais (flux unique ou double-lecture echouee), on confirme
+            # automatiquement pour ne pas perdre l'access log.
+            if camera_type == "entry":
+                _now = time.time()
+                for _p in list(_authorized_entries.keys()):
+                    _ei = _authorized_entries.get(_p) or {}
+                    if _now - _ei.get("timestamp", _now) > _ENTRY_CONFIRMATION_TIMEOUT_SEC:
+                        _gid = _ei.get("guardian_id")
+                        confirm_entry_in_db(app, _p, site, _gid)
+                        _authorized_entries.pop(_p, None)
+                        trigger_gate(site, "entry", "CLOSE")
+                        print(f"[ACCES] Entree auto-confirmee (timeout {_ENTRY_CONFIRMATION_TIMEOUT_SEC}s) plaque {_p} site={site}")
+
             results = model(frame, conf=0.38, verbose=False, imgsz=480)
             banned_set = get_banned_plates(app)
 
             plate_detections: dict[tuple, dict] = {}
             if plate_model is not None:
-                p_results = plate_model(frame, conf=0.4, verbose=False, imgsz=320)
+                p_results = plate_model(frame, conf=0.25, verbose=False, imgsz=416)
                 for pbox in p_results[0].boxes:
                     if int(pbox.cls[0]) != 0:
                         continue
                     px1, py1, px2, py2 = map(int, pbox.xyxy[0])
+                    pconf = float(pbox.conf[0])
+                    all_plate_boxes.append((px1, py1, px2, py2, pconf))
                     pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
+                    matched = False
                     for vbox in results[0].boxes:
                         vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
                         if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
@@ -1024,6 +1141,7 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                                 ptext = read_plate_text(plate_img)
                                 if ptext:
                                     plate_detections[k] = {"bbox": (px1, py1, px2, py2), "text": ptext}
+                            matched = True
                             break
 
             for result in results[0].boxes:
@@ -1040,18 +1158,31 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                     cv2.putText(display_frame, f"INTERDIT {cls_name.upper()}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 140, 255), 3)
                     continue
 
+                h = y2 - y1
+                roi_y1 = int(y1 + h * 0.45)
+                roi_y2 = y2
+                cv2.rectangle(display_frame, (x1, roi_y1), (x2, roi_y2), (180, 180, 180), 1)
+                cv2.putText(display_frame, "PLATE ROI", (x1 + 2, roi_y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
+
                 plate = None
                 plate_info = plate_detections.get((x1, y1, x2, y2))
                 if plate_info is not None:
                     plate = plate_info["text"]
                     ppx1, ppy1, ppx2, ppy2 = plate_info["bbox"]
-                    cv2.rectangle(display_frame, (ppx1, ppy1), (ppx2, ppy2), (255, 255, 0), 2)
-                    cv2.putText(display_frame, plate, (ppx1, ppy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    cv2.rectangle(display_frame, (ppx1, ppy1), (ppx2, ppy2), (0, 255, 255), 3)
+                    cv2.putText(display_frame, plate, (ppx1, ppy1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                 else:
                     h = y2 - y1
                     plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
                     if plate_roi.size > 0:
                         plate = read_plate_text(plate_roi)
+                    if not plate:
+                        for ratio in (0.45, 0.55, 0.65):
+                            roi = frame[int(y1 + h * ratio):y2, x1:x2]
+                            if roi.size > 0 and roi.shape[0] > 5:
+                                plate = read_plate_text(roi)
+                                if plate:
+                                    break
 
                 if not plate:
                     continue
@@ -1066,7 +1197,7 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                 elif not vinfo or vinfo.get("status") not in ("active", "pending"):
                     signal_unknown_plate_detected(plate)
                     cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 165, 255), 4)
-                    cv2.putText(display_frame, f"INCONNU {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
+                    cv2.putText(display_frame, f"ENREGISTRER {plate}", (x1, max(35, y1 - 45)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 165, 255), 3)
                 else:
                     now = time.time()
                     if camera_type == "entry":
@@ -1107,6 +1238,10 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         else:
             _last_detections_by_site.pop(site_key, None)
 
+        for px1, py1, px2, py2, pconf in all_plate_boxes:
+            cv2.rectangle(display_frame, (px1, py1), (px2, py2), (255, 255, 0), 2)
+            cv2.putText(display_frame, f"PLATE {pconf:.2f}", (px1, py1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
+
         # Dessin des bboxes vertes pour les vehicules
         for det in _last_detections_by_site.get(site_key, []):
             x1, y1, x2, y2, label = det
@@ -1129,8 +1264,95 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
         ret, buffer = cv2.imencode('.jpg', display_frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_bytes = buffer.tobytes()
 
+        _store_latest_frame(site_key, frame, camera_type)
+
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+
+_latest_frames: dict[str, tuple[np.ndarray, str]] = {}
+_latest_frames_lock = threading.Lock()
+
+
+def _store_latest_frame(site_key: str, frame: np.ndarray, camera_type: str):
+    with _latest_frames_lock:
+        _latest_frames[site_key] = (frame.copy(), camera_type)
+
+
+def get_latest_frame(site: str | None, camera_type: str = "entry") -> tuple[np.ndarray | None, str]:
+    site_key = f"{site or '__default__'}_{camera_type}"
+    with _latest_frames_lock:
+        entry = _latest_frames.get(site_key)
+        if entry:
+            return entry
+    return None, camera_type
+
+
+@app.route('/api/capture_ocr', methods=['POST'])
+def api_capture_ocr():
+    if 'user_id' not in session:
+        return jsonify(error='unauthorized'), 401
+    site = _resolve_site()
+    camera_type = request.json.get('camera_type', 'entry') if request.is_json else request.form.get('camera_type', 'entry')
+    frame, _ = get_latest_frame(site, camera_type)
+    if frame is None:
+        return jsonify(error='Aucune frame disponible. Le flux n\'est pas encore actif.'), 400
+
+    results = model(frame, conf=0.38, verbose=False, imgsz=480)
+    plate = None
+    plate_bbox = None
+
+    if plate_model is not None:
+        p_results = plate_model(frame, conf=0.25, verbose=False, imgsz=416)
+        for pbox in p_results[0].boxes:
+            if int(pbox.cls[0]) != 0:
+                continue
+            px1, py1, px2, py2 = map(int, pbox.xyxy[0])
+            pcx, pcy = (px1 + px2) // 2, (py1 + py2) // 2
+            for vbox in results[0].boxes:
+                vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
+                if vx1 <= pcx <= vx2 and vy1 <= pcy <= vy2:
+                    plate_img = frame[py1:py2, px1:px2]
+                    if plate_img.size > 0:
+                        ptext = read_plate_text(plate_img)
+                        if ptext:
+                            plate = ptext
+                            plate_bbox = [px1, py1, px2, py2]
+                    break
+
+    if not plate:
+        h, w = frame.shape[:2]
+        candidates = []
+        for vbox in results[0].boxes:
+            vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
+            vh = vy2 - vy1
+            for ratio in (0.50, 0.60, 0.70):
+                y_start = int(vy1 + vh * ratio)
+                roi = frame[y_start:vy2, vx1:vx2]
+                if roi.size > 0 and roi.shape[0] > 5 and roi.shape[1] > 10:
+                    candidates.append(roi)
+        if not candidates:
+            candidates = [frame[int(h*0.5):h, int(w*0.1):int(w*0.9)]]
+        for roi in candidates:
+            ptext = read_plate_text(roi)
+            if ptext:
+                plate = ptext
+                break
+
+    if not plate:
+        return jsonify(plate=None, message='Aucune plaque detectee sur cette capture.')
+
+    vinfo = get_vehicle_info(app, plate) or {}
+    status = vinfo.get("status", "unknown")
+    if status not in ("active", "pending"):
+        status = "unknown"
+
+    return jsonify({
+        "plate": plate,
+        "status": status,
+        "bbox": plate_bbox,
+        "message": f"Plaque detectee : {plate} — Statut : {status}",
+    })
 
 
 def _fetch_http_snapshot(url: str):
@@ -1153,7 +1375,8 @@ def _fetch_http_snapshot(url: str):
             req = urllib.request.Request(shot_url, headers={"User-Agent": "OpenCV"})
             resp = urllib.request.urlopen(req, timeout=5)
             data = resp.read()
-            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            with _suppress_c_stderr():
+                frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
                 print(f"[Snapshot HTTP] OK via {shot_url} ({len(data)} octets)")
                 return _rotate_to_portrait(frame)
@@ -1170,7 +1393,8 @@ def _fetch_http_snapshot(url: str):
         a = data.find(b"\xff\xd8")
         b = data.find(b"\xff\xd9")
         if a != -1 and b != -1 and b > a:
-            frame = cv2.imdecode(np.frombuffer(data[a:b+2], dtype=np.uint8), cv2.IMREAD_COLOR)
+            with _suppress_c_stderr():
+                frame = cv2.imdecode(np.frombuffer(data[a:b+2], dtype=np.uint8), cv2.IMREAD_COLOR)
             if frame is not None:
                 print(f"[Snapshot HTTP] Frame extraite du MJPEG ({len(data)} octets lus)")
                 return _rotate_to_portrait(frame)
@@ -1253,9 +1477,9 @@ def video_feed():
             url = cfg.get(f"camera_url_{camera_type}", "") or ""
     url = _normalize_url(url) if url else ""
     
-    print(f"[VIDEO_FEED] role={session.get('role')} site={site} camera={camera_type} url='{url}' gid={gid}")
+    print(f"[VIDEO_FEED] role={session.get('role')} site={site} camera={camera_type} gid={gid}")
     return Response(
-        generate_frames(site=site, camera_type=camera_type, guardian_id=gid, pre_fetched_url=url),
+        generate_frames(site=site, camera_type=camera_type, guardian_id=gid),
         mimetype='multipart/x-mixed-replace; boundary=frame',
     )
 

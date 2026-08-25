@@ -5,6 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import and_, func
 
+import config
 from models import AccessLog, db
 from scope import vehicles_for_user
 
@@ -19,7 +20,7 @@ def count_vehicles_present(role: str | None, site: str | None) -> int:
         AccessLog.plate_number.label("plate"),
         func.max(AccessLog.timestamp).label("max_ts"),
     )
-    if role != "admin" and site:
+    if site:
         sq = sq.filter(AccessLog.site == site)
     sq = sq.group_by(AccessLog.plate_number).subquery()
 
@@ -35,7 +36,7 @@ def count_vehicles_present(role: str | None, site: str | None) -> int:
             ),
         )
     )
-    if role != "admin" and site:
+    if site:
         q = q.filter(AccessLog.site == site)
     return int(q.scalar() or 0)
 
@@ -43,7 +44,7 @@ def count_vehicles_present(role: str | None, site: str | None) -> int:
 def count_access_today(role: str | None, site: str | None) -> int:
     start = _today_start_utc()
     q = AccessLog.query.filter(AccessLog.timestamp >= start, AccessLog.action == "entry")
-    if role != "admin" and site:
+    if site:
         q = q.filter(AccessLog.site == site)
     return q.count()
 
@@ -55,7 +56,7 @@ def count_alerts_today(role: str | None, site: str | None) -> int:
         AccessLog.status.isnot(None),
         AccessLog.status.notin_(["authorized", "manual"]),
     )
-    if role != "admin" and site:
+    if site:
         q = q.filter(AccessLog.site == site)
     return q.count()
 
@@ -63,7 +64,7 @@ def count_alerts_today(role: str | None, site: str | None) -> int:
 def count_forbidden_attempts_today(role: str | None, site: str | None) -> int:
     start = _today_start_utc()
     q = AccessLog.query.filter(AccessLog.timestamp >= start, AccessLog.status == "banned")
-    if role != "admin" and site:
+    if site:
         q = q.filter(AccessLog.site == site)
     return q.count()
 
@@ -96,3 +97,23 @@ def get_dashboard_kpis(role: str | None, site: str | None, capacity: int) -> dic
         "capacity": capacity,
         "site_label": site or "Tous les sites",
     }
+
+
+def get_dashboard_kpis_by_site(role: str | None) -> list[dict]:
+    if role == "admin":
+        sites = list(config.SITE_CONFIG.keys())
+    else:
+        user_site = None
+        if role and role != "admin":
+            user_site = None
+        sites = [user_site] if user_site else []
+    if not sites:
+        return []
+
+    result = []
+    for site_name in sites:
+        capacity = config.get_site_capacity(site_name)
+        kpi = get_dashboard_kpis(role, site_name, capacity)
+        kpi["site"] = site_name
+        result.append(kpi)
+    return result
