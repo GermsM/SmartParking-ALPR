@@ -222,7 +222,9 @@ def init_presence_from_db(app) -> None:
 
         with _lock:
             _present.clear()
-            for log in q.all():
+            # Les entrees refusees (banni, type interdit) ne stationnent pas :
+            # elles ne doivent pas etre rechargees comme presentes au demarrage.
+            for log in q.filter(AccessLog.status.notin_(("banned", "forbidden_type"))).all():
                 _present[log.plate_number] = {
                     "last_seen": time.time() - 3600.0,
                     "site": log.site,

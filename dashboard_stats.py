@@ -14,8 +14,17 @@ def _today_start_utc() -> datetime:
     return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+# Statuts d'entrée qui ne correspondent pas à un stationnement réel :
+# tentatives refusées (plaque bannie, type de véhicule interdit).
+_NOT_PARKED_STATUSES = ("banned", "forbidden_type")
+
+
 def count_vehicles_present(role: str | None, site: str | None) -> int:
-    """Dernière action par plaque : si c'est une entrée, le véhicule est considéré présent."""
+    """Dernière action par plaque : si c'est une entrée acceptée, le véhicule est présent.
+
+    Les entrées refusées (statut banned / forbidden_type) ne stationnent pas :
+    elles ne doivent pas gonfler le compteur ni le taux d'occupation.
+    """
     sq = db.session.query(
         AccessLog.plate_number.label("plate"),
         func.max(AccessLog.timestamp).label("max_ts"),
@@ -33,6 +42,7 @@ def count_vehicles_present(role: str | None, site: str | None) -> int:
                 AccessLog.plate_number == sq.c.plate,
                 AccessLog.timestamp == sq.c.max_ts,
                 AccessLog.action == "entry",
+                AccessLog.status.notin_(_NOT_PARKED_STATUSES),
             ),
         )
     )
