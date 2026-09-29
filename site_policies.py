@@ -131,15 +131,26 @@ def update_site(site_id):
 @site_policy_bp.route("/admin/sites/supprimer/<int:site_id>", methods=["POST"])
 @login_required("admin")
 def delete_site(site_id):
-    """Supprime un site de la base de donnees et detache les references."""
+    """Supprime un site de la base de donnees et nettoie toutes ses references.
+
+    Detache les liens par cle etrangere (site_id) ET par nom (site /
+    site_authorized) pour qu'aucun site fantome ne subsiste dans
+    l'interface (tableau de bord, historique, notifications, registre).
+    """
     s = Site.query.get_or_404(site_id)
     name = s.name
 
-    # Detacher les utilisateurs, vehicules et logs lies a ce site
+    # Detacher les utilisateurs, vehicules et logs lies a ce site (par site_id)
     User.query.filter_by(site_id=s.id).update({"site_id": None, "site": None})
     Vehicle.query.filter_by(site_id=s.id).update({"site_id": None, "site_authorized": None})
     AccessLog.query.filter_by(site_id=s.id).update({"site_id": None, "site": None})
     Notification.query.filter_by(site_id=s.id).update({"site_id": None, "site": None})
+
+    # Nettoyer aussi les references par nom (anciens enregistrements sans site_id)
+    User.query.filter(User.site_id.is_(None), User.site == name).update({"site": None})
+    Vehicle.query.filter(Vehicle.site_authorized == name).update({"site_authorized": None})
+    AccessLog.query.filter(AccessLog.site_id.is_(None), AccessLog.site == name).update({"site": None})
+    Notification.query.filter(Notification.site_id.is_(None), Notification.site == name).update({"site": None})
 
     db.session.delete(s)
     db.session.commit()
