@@ -21,9 +21,26 @@
 </div>
 
 <div class="card card-ps">
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-md-6">
+                <div class="input-group">
+                    <span class="input-group-text bg-dark border-secondary text-secondary"><i class="bi bi-search"></i></span>
+                    <input type="text" id="logSearch" class="form-control" placeholder="Rechercher par plaque ou site...">
+                </div>
+            </div>
+            <div class="col-md-3">
+                <select id="logActionFilter" class="form-select">
+                    <option value="">Toutes les actions</option>
+                    <option value="entry">Entrées</option>
+                    <option value="exit">Sorties</option>
+                </select>
+            </div>
+        </div>
+    </div>
     <div class="card-body p-0">
         <div class="table-responsive">
-            <table class="table table-striped table-hover table-darkish mb-0">
+            <table class="table table-striped table-hover table-darkish mb-0 align-middle" id="logTable">
                 <thead>
                     <tr>
                         <th>Date &amp; heure</th>
@@ -32,6 +49,7 @@
                         <th>Statut</th>
                         <th>Durée</th>
                         <th>Site</th>
+                        {% if session.role == 'admin' %}<th class="text-end">Actions</th>{% endif %}
                     </tr>
                 </thead>
                 <tbody>
@@ -55,10 +73,21 @@
                             {% else %}—{% endif %}
                         </td>
                         <td>{{ log.site or '—' }}</td>
+                        {% if session.role == 'admin' %}
+                        <td class="text-end">
+                            <button type="button" class="btn btn-sm btn-outline-danger btn-delete-log"
+                                    data-log-plate="{{ log.plate_number }}"
+                                    data-log-date="{{ log.timestamp.strftime('%d/%m/%Y %H:%M:%S') }}"
+                                    data-delete-url="{{ url_for('logs.delete_log', log_id=log.id) }}"
+                                    title="Supprimer cette ligne">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </td>
+                        {% endif %}
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="6" class="text-center text-secondary py-5">Aucun mouvement enregistré pour le moment</td>
+                        <td colspan="{{ 7 if session.role == 'admin' else 6 }}" class="text-center text-secondary py-5">Aucun mouvement enregistré pour le moment</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -67,4 +96,73 @@
     </div>
 </div>
 
+{% if session.role == 'admin' %}
+<div class="modal fade" id="confirmDeleteLogModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border" style="background: var(--ps-card); color: var(--ps-text); border-color: var(--ps-border) !important;">
+            <div class="modal-header border-bottom" style="border-color: var(--ps-border) !important;">
+                <h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>Supprimer cette ligne d'historique ?</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Fermer"></button>
+            </div>
+            <div class="modal-body">
+                <p class="mb-0">Cette action est <strong>irréversible</strong>.</p>
+                <p class="mb-0 mt-2">Plaque : <strong id="confirmDeleteLogPlate"></strong></p>
+                <p class="mb-0">Date : <span id="confirmDeleteLogDate"></span></p>
+            </div>
+            <div class="modal-footer border-top" style="border-color: var(--ps-border) !important;">
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Annuler</button>
+                <form method="post" id="confirmDeleteLogForm" action="#" class="d-inline">
+                    <button type="submit" class="btn btn-danger"><i class="bi bi-trash me-1"></i>Supprimer</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Filtres historique (recherche + action) — même fonctionnement que la page Véhicules
+(function() {
+    var searchInput = document.getElementById('logSearch');
+    var actionFilter = document.getElementById('logActionFilter');
+    var table = document.getElementById('logTable');
+    if (!searchInput || !table) return;
+
+    function filterTable() {
+        var query = (searchInput.value || '').toLowerCase();
+        var actionVal = (actionFilter ? actionFilter.value : '').toLowerCase();
+        var rows = table.querySelectorAll('tbody tr');
+        rows.forEach(function(row) {
+            if (row.querySelector('td[colspan]')) return;
+            var text = (row.textContent || '').toLowerCase();
+            var actionCell = row.querySelector('td:nth-child(3)');
+            var rowAction = actionCell ? (actionCell.textContent || '').trim().toLowerCase() : '';
+            var matchesSearch = !query || text.indexOf(query) !== -1;
+            var matchesAction = !actionVal || rowAction.indexOf(actionVal) !== -1;
+            row.style.display = (matchesSearch && matchesAction) ? '' : 'none';
+        });
+    }
+
+    searchInput.addEventListener('input', filterTable);
+    if (actionFilter) actionFilter.addEventListener('change', filterTable);
+})();
+
+{% if session.role == 'admin' %}
+(function() {
+    var modal = document.getElementById('confirmDeleteLogModal');
+    if (!modal || typeof bootstrap === 'undefined') return;
+    document.querySelectorAll('.btn-delete-log').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            document.getElementById('confirmDeleteLogPlate').textContent = btn.getAttribute('data-log-plate') || '';
+            document.getElementById('confirmDeleteLogDate').textContent = btn.getAttribute('data-log-date') || '';
+            document.getElementById('confirmDeleteLogForm').setAttribute('action', btn.getAttribute('data-delete-url') || '#');
+            new bootstrap.Modal(modal).show();
+        });
+    });
+})();
+{% endif %}
+</script>
 {% endblock %}

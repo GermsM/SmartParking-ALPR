@@ -2,12 +2,12 @@ import csv
 from datetime import datetime, timedelta
 from io import StringIO
 
-from flask import Blueprint, Response, render_template, request, session
+from flask import Blueprint, Response, flash, redirect, render_template, request, session, url_for
 
 import config
 from auth import login_required
 from frequency_export import pair_access_logs
-from models import AccessLog, User
+from models import AccessLog, User, db
 from site_policies import site_policy_bp
 
 logs_bp = Blueprint("logs", __name__)
@@ -36,6 +36,17 @@ def view_logs():
         site_policy = config.get_site_policy(site)
 
     return render_template("logs.html", logs=logs, site_policy=site_policy)
+
+
+@logs_bp.route("/logs/supprimer/<int:log_id>", methods=["POST"])
+@login_required("admin")
+def delete_log(log_id):
+    """Supprime une ligne d'Historique — administrateur uniquement."""
+    log = AccessLog.query.get_or_404(log_id)
+    db.session.delete(log)
+    db.session.commit()
+    flash(f"Entrée d'historique supprimée (plaque {log.plate_number}).", "success")
+    return redirect(url_for("logs.view_logs"))
 
 
 @logs_bp.route("/logs/export")
