@@ -189,6 +189,17 @@
             color: var(--ps-text);
             border-color: var(--ps-border);
         }
+        /* Les boutons outline-light (texte blanc) sont invisibles sur cartes
+           claires : on les aligne sur la palette du theme en mode clair. */
+        [data-theme="light"] .btn-outline-light {
+            color: var(--ps-text);
+            border-color: var(--ps-border);
+        }
+        [data-theme="light"] .btn-outline-light:hover {
+            color: var(--ps-text);
+            background: var(--ps-nav-hover);
+            border-color: var(--ps-muted);
+        }
         [data-theme="light"] .btn-close { filter: none; opacity: .55; }
         .btn-shortcut-outline {
             color: var(--ps-text);
