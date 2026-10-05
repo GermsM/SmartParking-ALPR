@@ -512,9 +512,13 @@ class DetectionWorker:
                 label = f"{cls_name} {float(result.conf[0]):.2f}"
                 current_detections.append((x1, y1, x2, y2, label))
                 
+                # Classes interdites : exiger une confiance elevee avant de
+                # declencher alerte/objet. Un "truck" a 0.39-0.43 est un faux
+                # positif frequent de yolov8n et ne doit pas alerter.
                 if cls_name in config.FORBIDDEN_YOLO_CLASSES:
-                    signal_forbidden_type_detected(cls_name)
-                    process_forbidden_vehicle(app, cls_name, self.site, self.guardian_id)
+                    if float(result.conf[0]) >= 0.55:
+                        signal_forbidden_type_detected(cls_name)
+                        process_forbidden_vehicle(app, cls_name, self.site, self.guardian_id)
                     continue
                 
                 h = y2 - y1
@@ -526,16 +530,13 @@ class DetectionWorker:
                 if plate_info is not None:
                     plate = plate_info["text"]
                 else:
+                    # Fallback unique sur la moitie basse du vehicule.
+                    # PAS de boucle multi-ratios : elle produisait de fausses
+                    # plaques valides (ex. 8111SE15 invente) qui se loggeaient
+                    # comme de vraies detections.
                     plate_roi = frame[int(y1 + h * 0.52):y2, x1:x2]
                     if plate_roi.size > 0:
                         plate = read_plate_text(plate_roi)
-                    if not plate:
-                        for ratio in (0.45, 0.55, 0.65):
-                            roi = frame[int(y1 + h * ratio):y2, x1:x2]
-                            if roi.size > 0 and roi.shape[0] > 5:
-                                plate = read_plate_text(roi)
-                                if plate:
-                                    break
                 
                 if not plate:
                     continue
@@ -851,172 +852,9 @@ def _resolve_site():
     return site
 
 
-# Formats RDC depuis le décret 08/15 : 4 chiffres, 2 lettres, puis le code
-# provincial à 2 chiffres.  Les 3 caractères CGO à gauche de la plaque ne font
-# pas partie de l'immatriculation et sont volontairement ignorés par l'OCR.
-_DRC_PLATE_RE = re.compile(r"^\d{4}[A-Z]{2}(?:0[1-9]|1\d|2[0-6])$")
-_DRC_LEGACY_PLATE_RE = re.compile(r"^[A-Z]{2}\d{4}[A-Z]{2}$")
-_UCB_PLATE_RE = re.compile(r"^UCB(?:\d{4,8}[A-Z]{0,4}|[A-Z]{2,6}\d{4,8})$")
-_OCR_WHITELIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-
-_DIGIT_CONFUSIONS = str.maketrans({
-    "O": "0", "Q": "0", "D": "0", "I": "1", "L": "1",
-    "Z": "2", "S": "5", "B": "8", "G": "6",
-})
-_LETTER_CONFUSIONS = str.maketrans({
-    "0": "O", "1": "I", "5": "S", "8": "B", "2": "Z", "6": "G",
-})
-
-
-def _deskew_plate(gray):
-    """Corrige une inclinaison légère sans déformer une plaque déjà droite."""
-    _, foreground = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    points = np.column_stack(np.where(foreground > 0)).astype(np.float32)
-    if len(points) < 20:
-        return gray
-
-    angle = cv2.minAreaRect(points)[-1]
-    # OpenCV renvoie suivant les versions un angle dans [-90, 0[ ou ]0, 90].
-    if angle < -45:
-        angle += 90
-    elif angle > 45:
-        angle -= 90
-    if not 1.0 <= abs(angle) <= 12.0:
-        return gray
-
-    height, width = gray.shape[:2]
-    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
-    return cv2.warpAffine(
-        gray, matrix, (width, height), flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REPLICATE,
-    )
-
-
-def improve_plate_image(plate_img, return_variants=False):
-    """Prétraite une plaque pour Tesseract.
-
-    Le redimensionnement n'est déclenché que pour les petits crops : le texte
-    est amené vers ~28 px de haut, sans agrandir inutilement les grandes
-    plaques (ce qui avait dégradé les essais 3x/4x). Avec ``return_variants``,
-    retourne plusieurs binarisations et une version grayscale sans seuillage
-    pour l'ensemble OCR.
-    """
-    if plate_img is None or plate_img.size == 0:
-        return None
-
-    if len(plate_img.shape) == 2:
-        gray = plate_img.copy()
-    elif plate_img.shape[2] == 4:
-        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGRA2GRAY)
-    else:
-        gray = cv2.cvtColor(plate_img, cv2.COLOR_BGR2GRAY)
-
-    height, width = gray.shape[:2]
-    estimated_text_height = max(1.0, height * 0.55)
-    scale = max(1.0, min(4.0, 28.0 / estimated_text_height))
-    if scale > 1.01:
-        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-
-    gray = _deskew_plate(gray)
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    gray = clahe.apply(gray)
-    gray = cv2.bilateralFilter(gray, 7, 60, 60)
-
-    adaptive = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5,
-    )
-    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    median = cv2.medianBlur(gray, 3)
-    _, fixed100 = cv2.threshold(median, 100, 255, cv2.THRESH_BINARY)
-    _, fixed120 = cv2.threshold(median, 120, 255, cv2.THRESH_BINARY)
-
-    clahe_strong = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
-    gray_strong = clahe_strong.apply(gray)
-    gray_strong = cv2.bilateralFilter(gray_strong, 9, 75, 75)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    variants = []
-    for name, binary in (
-        ("adaptive", adaptive),
-        ("otsu", otsu),
-        ("fixed100", fixed100),
-        ("fixed120", fixed120),
-    ):
-        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
-        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
-        variants.append((name, cleaned))
-
-    variants.append(("grayscale_strong", gray_strong))
-
-    return variants if return_variants else variants[0][1]
-
-
-def _repair_drc_candidate(candidate):
-    """Applique les confusions OCR uniquement aux positions connues du format RDC."""
-    if len(candidate) != 8:
-        return None
-    repaired = candidate[:4].translate(_DIGIT_CONFUSIONS)
-    repaired += candidate[4:6].translate(_LETTER_CONFUSIONS)
-    repaired += candidate[6:].translate(_DIGIT_CONFUSIONS)
-    return repaired if _DRC_PLATE_RE.fullmatch(repaired) else None
-
-
-def post_process_plate(text):
-    """Normalise, corrige et valide un texte OCR de plaque RDC/UCB."""
-    normalized = re.sub(r"[^A-Z0-9]", "", (text or "").upper())
-    if not normalized:
-        return None
-
-    # Plaques institutionnelles : UCB0001XXXX ou UCB-BUG-0001 (tirets retirés).
-    if _UCB_PLATE_RE.fullmatch(normalized):
-        return normalized
-
-    # Le texte peut contenir CGO, la numérotation laser ou un caractère parasite
-    # avant/après la série. Examiner donc toutes les fenêtres de 8 caractères.
-    tokens = re.findall(r"[A-Z0-9]{8,}", normalized)
-    for token in tokens:
-        for start in range(len(token) - 7):
-            raw_candidate = token[start:start + 8]
-            repaired = _repair_drc_candidate(raw_candidate)
-            if repaired:
-                return repaired
-
-    return None
-
-
-def read_plate_text(plate_img, psm_modes=(7, 6, 8)):
-    """OCR multi-PSM/binarisation avec vote; retourne la plaque validée ou None."""
-    variants = improve_plate_image(plate_img, return_variants=True)
-    if not variants:
-        return None
-
-    candidates = []
-    for variant_index, (_, processed) in enumerate(variants):
-        for psm in psm_modes:
-            ocr_config = f"--oem 3 --psm {psm} -c tessedit_char_whitelist={_OCR_WHITELIST}"
-            try:
-                raw = pytesseract.image_to_string(processed, config=ocr_config).strip()
-            except (pytesseract.TesseractError, OSError):
-                continue
-            plate = post_process_plate(raw)
-            if plate:
-                # PSM 7 convient normalement à une plaque sur une ligne. Le
-                # score ne tranche qu'en cas d'égalité de votes.
-                quality = (12 if psm == 7 else 8 if psm == 6 else 6) - variant_index
-                if _DRC_PLATE_RE.fullmatch(plate):
-                    quality += 4
-                candidates.append((plate, quality))
-
-    if not candidates:
-        return None
-    votes = {}
-    quality_sums = {}
-    for plate, quality in candidates:
-        votes[plate] = votes.get(plate, 0) + 1
-        quality_sums[plate] = quality_sums.get(plate, 0) + quality
-    avg_qualities = {plate: quality_sums[plate] / votes[plate] for plate in votes}
-    return max(votes, key=lambda plate: (avg_qualities[plate], votes[plate], plate))
+# Pipeline OCR des plaques : extrait dans plate_ocr.py pour pouvoir etre
+# teste hors Flask (test_pipeline.py) sans dupliquer la logique.
+from plate_ocr import read_plate_text  # noqa: E402
 
 
 def _format_wa_phone(phone: str) -> str:
@@ -1342,21 +1180,54 @@ def generate_frames(site: str | None = None, camera_type: str = "entry", guardia
                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 
-_latest_frames: dict[str, tuple[np.ndarray, str]] = {}
+_latest_frames: dict[str, tuple[np.ndarray, str, float]] = {}
 _latest_frames_lock = threading.Lock()
+_MAX_FRAME_AGE_SEC = 4.0  # une capture OCR ne doit pas analyser une frame perimee
 
 
 def _store_latest_frame(site_key: str, frame: np.ndarray, camera_type: str):
     with _latest_frames_lock:
-        _latest_frames[site_key] = (frame.copy(), camera_type)
+        _latest_frames[site_key] = (frame.copy(), camera_type, time.time())
 
 
 def get_latest_frame(site: str | None, camera_type: str = "entry") -> tuple[np.ndarray | None, str]:
+    """Retourne la derniere frame du flux SI elle est recente.
+
+    Si le flux MJPEG est fige ou mort, la frame stockee devient perimee :
+    on la refuse au bout de _MAX_FRAME_AGE_SEC pour que la capture OCR
+    retombe sur une lecture directe du stream au lieu d'analyser
+    indefiniment la meme vieille image (impression que la detection
+    "ne marche plus" tant que l'app n'est pas redemarree).
+    """
     site_key = f"{site or '__default__'}_{camera_type}"
     with _latest_frames_lock:
         entry = _latest_frames.get(site_key)
         if entry:
-            return entry
+            frame, cam_type, ts = entry
+            if time.time() - ts <= _MAX_FRAME_AGE_SEC:
+                return frame, cam_type
+    return None, camera_type
+
+
+def _get_fresh_frame(site: str | None, camera_type: str) -> tuple[np.ndarray | None, str]:
+    """Frame pour la capture OCR : cache recente, sinon lecture directe du stream."""
+    frame, cam_type = get_latest_frame(site, camera_type)
+    if frame is not None:
+        return frame, cam_type
+
+    # Cache perime ou vide : lecture directe du stream (le cas echeant le
+    # stream partage entre entree/sortie puisque l'URL est identique).
+    for cam in (camera_type, "exit" if camera_type == "entry" else "entry"):
+        try:
+            stream = _get_stream(site, cam)
+        except Exception:
+            stream = None
+        if stream is None:
+            continue
+        success, fresh = stream.read()
+        if success and fresh is not None:
+            print(f"[CAPTURE_OCR] Cache perime -> lecture directe du stream ({cam})")
+            return fresh, cam
     return None, camera_type
 
 
@@ -1366,14 +1237,15 @@ def api_capture_ocr():
         return jsonify(error='unauthorized'), 401
     site = _resolve_site()
     camera_type = request.json.get('camera_type', 'entry') if request.is_json else request.form.get('camera_type', 'entry')
-    frame, _ = get_latest_frame(site, camera_type)
+    frame, _ = _get_fresh_frame(site, camera_type)
     if frame is None:
-        return jsonify(error='Aucune frame disponible. Le flux n\'est pas encore actif.'), 400
+        return jsonify(error='Aucune frame disponible. Verifiez que le flux camera est actif.'), 400
 
     results = model(frame, conf=0.38, verbose=False, imgsz=480)
     plate = None
     plate_bbox = None
 
+    # 1) Priorite au modele plaque dedie : seule source fiable pour l'OCR.
     if plate_model is not None:
         p_results = plate_model(frame, conf=0.25, verbose=False, imgsz=416)
         for pbox in p_results[0].boxes:
@@ -1392,24 +1264,20 @@ def api_capture_ocr():
                             plate_bbox = [px1, py1, px2, py2]
                     break
 
+    # 2) Fallback UNIQUE sur la moitie basse du vehicule — meme logique que
+    # DetectionWorker. La boucle multi-ratios d'origine inventait des plaques
+    # valides (ex. 8111SE15) et le decoupage de la frame entiere lisait du
+    # texte hors plaque ; tous deux supprimes.
     if not plate:
-        h, w = frame.shape[:2]
-        candidates = []
         for vbox in results[0].boxes:
             vx1, vy1, vx2, vy2 = map(int, vbox.xyxy[0])
-            vh = vy2 - vy1
-            for ratio in (0.50, 0.60, 0.70):
-                y_start = int(vy1 + vh * ratio)
-                roi = frame[y_start:vy2, vx1:vx2]
-                if roi.size > 0 and roi.shape[0] > 5 and roi.shape[1] > 10:
-                    candidates.append(roi)
-        if not candidates:
-            candidates = [frame[int(h*0.5):h, int(w*0.1):int(w*0.9)]]
-        for roi in candidates:
-            ptext = read_plate_text(roi)
-            if ptext:
-                plate = ptext
-                break
+            plate_roi = frame[int(vy1 + (vy2 - vy1) * 0.52):vy2, vx1:vx2]
+            if plate_roi.size > 0 and plate_roi.shape[0] > 5 and plate_roi.shape[1] > 10:
+                ptext = read_plate_text(plate_roi)
+                if ptext:
+                    plate = ptext
+                    plate_bbox = [vx1, vy1, vx2, vy2]
+                    break
 
     if not plate:
         return jsonify(plate=None, message='Aucune plaque detectee sur cette capture.')

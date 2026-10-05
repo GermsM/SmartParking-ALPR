@@ -24,6 +24,9 @@
                         <div class="col-md-4" id="plate-field">
                             <label class="form-label" for="plate_number">Plaque</label>
                             <input type="text" class="form-control text-uppercase" id="plate_number" name="plate_number">
+                            <small id="plate_ocr_hint" class="text-success d-none mt-1">
+                                <i class="bi bi-camera me-1"></i>Pré-rempli depuis la détection OCR — vérifiez et corrigez si besoin.
+                            </small>
                         </div>
                         <div class="col-md-4">
                             <label class="form-label" for="vehicle_model">Marque / modèle</label>
@@ -102,6 +105,18 @@
     var plateField = document.getElementById('plate-field');
     var plateInput = document.getElementById('plate_number');
     var vtype = document.getElementById('vehicle_type');
+
+    // Pre-remplissage depuis une detection OCR : /vehicles/add?plate=XXXX
+    try {
+        var ocrPlate = new URLSearchParams(window.location.search).get('plate');
+        if (ocrPlate) {
+            plateInput.value = ocrPlate.toUpperCase().trim();
+            var hint = document.getElementById('plate_ocr_hint');
+            if (hint) hint.classList.remove('d-none');
+            plateInput.focus();
+        }
+    } catch (e) {}
+
     function sync() {
         var hide = noPlate.checked || vtype.value === 'sans_plaque';
         plateField.style.display = hide ? 'none' : '';

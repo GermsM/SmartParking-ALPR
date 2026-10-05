@@ -11,6 +11,7 @@ from email_service import (
 from notifications import create_notification
 from scope import vehicles_for_user
 from security_alerts import invalidate_banned_vehicle_cache
+from access_logging import remove_present_plate
 import config
 
 vehicles_bp = Blueprint("vehicles", __name__)
@@ -273,6 +274,10 @@ def delete_vehicle(id):
     db.session.delete(vehicle)
     db.session.commit()
     _invalidate_plates()
+    # Une plaque supprimee du registre ne doit plus rester « presente » en
+    # memoire : sinon elle continue de declencher des alertes dormeur alors
+    # que le vehicule n'existe plus en base.
+    remove_present_plate(plate)
     create_notification(
         f"Le véhicule {plate} a été supprimé du registre par l'administrateur.",
         site=site,

@@ -200,7 +200,7 @@ def process_forbidden_vehicle(app, yolo_class: str, site: str | None, guardian_i
 def init_presence_from_db(app) -> None:
     """Initialise l'etat _present en memoire a partir de la base de donnees au demarrage."""
     with app.app_context():
-        from models import AccessLog, db
+        from models import AccessLog, db, Vehicle
         from sqlalchemy import func, and_
 
         sq = db.session.query(
@@ -225,6 +225,11 @@ def init_presence_from_db(app) -> None:
             # Les entrees refusees (banni, type interdit) ne stationnent pas :
             # elles ne doivent pas etre rechargees comme presentes au demarrage.
             for log in q.filter(AccessLog.status.notin_(("banned", "forbidden_type"))).all():
+                # Ignorer aussi les plaques qui n'existent plus dans le registre
+                # ou qui ne sont pas actives : pas de surveillance dormeur dessus.
+                v = Vehicle.query.filter_by(plate_number=log.plate_number).first()
+                if not v or v.status != "active":
+                    continue
                 _present[log.plate_number] = {
                     "last_seen": time.time() - 3600.0,
                     "site": log.site,
@@ -236,13 +241,35 @@ def init_presence_from_db(app) -> None:
             print(f"Presence initialisee : {len(_present)} vehicule(s) stationne(s) recharge(s).")
 
 
+def remove_present_plate(plate: str) -> bool:
+    """Retire une plaque de l'etat de presence en memoire.
+
+    Appele a la suppression d'un vehicule du registre : une plaque qui
+    n'existe plus en base ne doit plus etre consideree comme stationnee
+    et ne doit donc plus declencher d'alertes (dormeur, etc.).
+    """
+    plate = (plate or "").upper().strip()
+    if not plate:
+        return False
+    with _lock:
+        removed = _present.pop(plate, None) is not None
+    if removed:
+        print(f"[ACCES] Presence purgee pour la plaque {plate} (vehicule supprime du registre)")
+    return removed
+
+
 def get_present_plates() -> dict[str, dict]:
     with _lock:
         return dict(_present)
 
 
 def check_long_stay_violations(app) -> list[dict]:
-    """Vehicules presents depuis plus de long_stay_hours."""
+    """Vehicules presents depuis plus de long_stay_hours.
+
+    Seuls les vehicules toujours enregistres et ACTIFS dans la base
+    doivent generer une alerte : une plaque supprimee, bannie ou en
+    attente du registre n'est plus sous surveillance dormeur.
+    """
     import config
 
     violations = []
@@ -250,7 +277,20 @@ def check_long_stay_violations(app) -> list[dict]:
     with _lock:
         items = list(_present.items())
 
+    if not items:
+        return violations
+
+    # Resoudre le statut actuel en base pour toutes les plaques presentes.
+    from models import Vehicle
+    plates = [plate for plate, _ in items]
+    with app.app_context():
+        rows = Vehicle.query.filter(Vehicle.plate_number.in_(plates)).all()
+        status_by_plate = {v.plate_number: v.status for v in rows}
+
     for plate, info in items:
+        # Vehicule supprime, banni ou en attente : pas d'alerte dormeur.
+        if status_by_plate.get(plate) != "active":
+            continue
         site = info.get("site")
         policy = config.get_site_policy(site)
         limit_h = policy.get("long_stay_hours", 48)

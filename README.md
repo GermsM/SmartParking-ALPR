@@ -24,7 +24,7 @@ Bien qu'illustré pour l'UCB, son architecture modulaire permet un déploiement 
 
 ### Fonctionnalités clés
 
-- **Reconnaissance automatique des plaques** — Détection YOLOv8 + OCR Tesseract en temps réel
+- **Reconnaissance automatique des plaques** — Détection YOLOv8 + OCR Tesseract en temps réel (pipeline testable hors serveur via `test_pipeline.py`)
 - **Double lecture entrée/sortie** — Validation du passage réel par deux caméras par site
 - **Multi-sites dynamique** — Ajoutez des sites sans modifier le code
 - **Barrière IP physique** — Contrôle automatisé avec simulation réseau
@@ -232,23 +232,29 @@ Le système utilise un modèle YOLOv8 spécialisé (`models/license_plate.pt`) p
 
 ### Pipeline OCR strict
 
-Le pipeline de reconnaissance optique (OCR) a été optimisé avec :
+Le pipeline de reconnaissance optique (OCR) vit dans `plate_ocr.py` (importé par `app.py`, testable hors Flask) :
 
 - **Prétraitement multi-variantes** — Binarisations adaptive, Otsu, seuils fixes (`fixed100`, `fixed120`) et version grayscale améliorée
-- **Vote multi-PSM** — Trois modes de segmentation Tesseract (PSM 6, 7, 8) avec pondération par qualité moyenne
+- **Vote multi-PSM** — Trois modes de segmentation Tesseract (PSM 6, 7, 8), sortie anticipée dès lecture parfaite (gain CPU sans changer le résultat)
+- **Sélection par ratio consensus/qualité** — Le gagnant est le candidat minimisant `distance d'édition totale au consensus ÷ qualité moyenne` : pénalise à la fois les lectures isolées (aberrantes) et les lectures peu fiables. Choix mesuré sur le jeu de test : 7/14 exactes contre 4/14 pour l'ancienne règle (moyenne de qualité puis votes)
 - **Validation stricte** — Seul le format RDC `\d{4}[A-Z]{2}\d{2}` est accepté après corrections positionnelles des confusions OCR (O↔0, I/L↔1, S↔5, B↔8, Z↔2, G↔6)
 - **Aucune correspondance codée en dur** — Le système ne contient aucune règle spécifique à une plaque individuelle
+- **Pas de fallback qui invente** — Le secours sur la moitié basse du véhicule ne tente qu'un seul ROI ; la boucle multi-ratios qui produisait de fausses plaques valides a été supprimée
+- **Chemin Tesseract auto-détecté** (`config.py`) — config.yaml, copie portable `bin/tesseract/`, Program Files, puis PATH ; avertissement explicite au démarrage si Tesseract est introuvable (l'OCR échouait en silence auparavant)
 
 ### Tests et résultats
 
-Tests honnêtes sur 10 images de terrain et de test :
+Tests honnêtes reproductibles avec `python test_pipeline.py` (15 images, vérité terrain = nom de fichier, images annotées dans `diag_out/` — dossier de sortie recréé à chaque exécution) :
 
-| Jeu de test | Images | Taux de réussite |
-|-------------|--------|------------------|
-| `uploads/` (terrain) | 5 | 0% — détection OK, OCR échoue sur 4/5 |
-| `Test_OCR/test_ocr/` | 5 | 40% — 2/5 plaques lues correctement |
+| Jeu de test | Images | Lecture exacte |
+|-------------|--------|----------------|
+| `uploads/` (terrain, 2560×1920) | 5 | 1/5 — plaques lointaines (~50 px), information insuffisante |
+| `demo_images` + `Test_OCR` (crops/zooms) | 10 | 6/10 — plaques proches lues exactement |
+| **Total** | **15** | **7/15** |
 
-Le système est conçu pour être **honnête** : quand il ne peut pas valider une plaque au format strict, il retourne `None` plutôt qu'un texte erroné.
+Détail important : la bonne lecture figure **dans les sorties brutes Tesseract pour 9/14 images détectées** — la limite restante est la sélection (vote) et la résolution des crops terrain. Une plaque de ~50 px de large ne peut pas être lue de façon fiable par OCR, quelle que soit la transformation (upscale, netteté, padding : tous testés, tous neutres ou négatifs).
+
+Le système est conçu pour être **honnête** : quand il ne peut pas valider une plaque au format strict, il retourne `None` plutôt qu'un texte erroné, et la saisie manuelle (`/api/manual-access`) reste disponible pour le gardien.
 
 ---
 

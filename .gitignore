@@ -31,6 +31,7 @@ instance/
 debug_ocr/
 debug_ocr_conf_upscale/
 test_ocr/
+diag_out/
 *.csv
 !uploads/resultats_detection_plaques.csv
 rapport_test_ocr.md

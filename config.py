@@ -1,5 +1,6 @@
 import os
 import secrets
+import shutil
 import yaml
 import pytesseract
 from flask import current_app
@@ -46,14 +47,45 @@ if os.path.exists(CONFIG_PATH):
         print("Erreur lors de la lecture de config.yaml:", str(e))
 
 # Configuration de Tesseract OCR
-pytesseract.pytesseract.tesseract_cmd = yaml_config.get("tesseract_cmd")
+# Resolution automatique de tesseract.exe :
+#   1. chemin de config.yaml s'il pointe vers un fichier existant,
+#   2. copie portable dans <projet>/bin/tesseract/,
+#   3. emplacements d'installation standard,
+#   4. variable d'environnement PATH.
+# Un message clair est affiche si Tesseract est introuvable (l'OCR echouerait
+# en silence dans le cas contraire).
+def _resolve_tesseract_cmd():
+    configured = yaml_config.get("tesseract_cmd")
+    if configured and os.path.isfile(configured):
+        return configured
+    project_local = os.path.join(os.path.dirname(__file__), 'bin', 'tesseract', 'tesseract.exe')
+    for candidate in (
+        project_local,
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    found_on_path = shutil.which("tesseract")
+    if found_on_path:
+        return found_on_path
+    return configured or "tesseract"
+
+
+pytesseract.pytesseract.tesseract_cmd = _resolve_tesseract_cmd()
 custom_config = yaml_config.get("custom_config")
 
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-print("Configuration Tesseract chargee avec succes")
-print("Chemin utilise :", pytesseract.pytesseract.tesseract_cmd)
+if os.path.isfile(pytesseract.pytesseract.tesseract_cmd):
+    print("Configuration Tesseract chargee avec succes")
+    print("Chemin utilise :", pytesseract.pytesseract.tesseract_cmd)
+else:
+    print("!!! ATTENTION : Tesseract OCR introuvable !")
+    print("!!! Chemin essaye :", pytesseract.pytesseract.tesseract_cmd)
+    print("!!! L'OCR des plaques ne fonctionnera PAS (les detections seront ignorees).")
+    print("!!! Installez Tesseract ou placez une copie portable dans bin/tesseract/.")
 
 # Configuration de la base de données
 SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', yaml_config.get("database_url"))
