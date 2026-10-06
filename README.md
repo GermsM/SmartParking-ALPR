@@ -244,17 +244,19 @@ Le pipeline de reconnaissance optique (OCR) vit dans `plate_ocr.py` (importé pa
 
 ### Tests et résultats
 
-Tests honnêtes reproductibles avec `python test_pipeline.py` (15 images, vérité terrain = nom de fichier, images annotées dans `diag_out/` — dossier de sortie recréé à chaque exécution) :
+Les tests ont été réalisés sur deux groupes d'images, avec 5 images chacun. Ils ont une valeur indicative : cinq images ne permettent pas de calculer un taux fiable.
 
-| Jeu de test | Images | Lecture exacte |
-|-------------|--------|----------------|
-| `uploads/` (terrain, 2560×1920) | 5 | 1/5 — plaques lointaines (~50 px), information insuffisante |
-| `demo_images` + `Test_OCR` (crops/zooms) | 10 | 6/10 — plaques proches lues exactement |
-| **Total** | **15** | **7/15** |
+| Test | Images | Lecture exacte | Erreur légère (1 caractère) | Erreur plus importante | Aucun résultat |
+| ---- | ------ | -------------- | --------------------------- | ---------------------- | -------------- |
+| Groupe 1 — images de développement, premier test | 5 | 1 | 0 | 4 | 0 |
+| Groupe 1 — après amélioration du prétraitement | 5 | 2 | 1 | 2 | 0 |
+| Groupe 2 — photos de terrain jamais vues | 5 | 0 | 1 | 0 | 4 |
 
-Détail important : la bonne lecture figure **dans les sorties brutes Tesseract pour 9/14 images détectées** — la limite restante est la sélection (vote) et la résolution des crops terrain. Une plaque de ~50 px de large ne peut pas être lue de façon fiable par OCR, quelle que soit la transformation (upscale, netteté, padding : tous testés, tous neutres ou négatifs).
+Le module lit correctement certaines plaques sur des images nettes, mais ses performances chutent sur des photos de terrain plus floues. Deux raisons principales : le modèle de détection n'a été entraîné que sur 172 images, et les photos de test ont été prises à la main, alors que l'usage prévu est une caméra fixe à l'entrée du parking.
 
-Le système est conçu pour être **honnête** : quand il ne peut pas valider une plaque au format strict, il retourne `None` plutôt qu'un texte erroné, et la saisie manuelle (`/api/manual-access`) reste disponible pour le gardien.
+Dans les cas difficiles, le système préfère ne retourner aucun résultat plutôt qu'une plaque qui ne respecte pas le format strict. Il peut toutefois encore proposer une lecture erronée. Le gardien doit donc toujours vérifier le résultat, et la saisie manuelle (`/api/manual-access`) reste disponible.
+
+Les résultats détaillés et leur analyse figurent dans le rapport du projet tutoré.
 
 ---
 
